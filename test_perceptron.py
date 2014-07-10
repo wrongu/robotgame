@@ -3,16 +3,16 @@ from evolution_bot import Perceptron, Robot
 from rgkit.run import Runner, Options
 from rgkit.game import Player
 
-bot0 = "brains/perceptron_36_9_10_generation100.dat"
-bot1 = "brains/perceptron_36_9_10_generation200.dat"
+bot0 = "brains/perceptron_36_9_10_generation400.dat"
+bot1 = "brains/perceptron_36_9_10_generation500.dat"
 
 robot0 = Robot()
 robot0.set_brain(Perceptron.load(bot0))
-player0 = Player(robot=robot0)
+player0 = Player(name="gen %s" % (bot0.split("generation")[1]), robot=robot0)
 
 robot1 = Robot()
 robot1.set_brain(Perceptron.load(bot1))
-player1 = Player(robot=robot1)
+player1 = Player(name="gen %s" % (bot1.split("generation")[1]), robot=robot1)
 
 opts = Options(print_info=True)
 

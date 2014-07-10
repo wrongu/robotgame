@@ -31,6 +31,11 @@ class Perceptron:
 	def __reset_states(self):
 		self.__states = map(lambda s: np.zeros((s,1)), self.__sizes)
 
+	@staticmethod
+	@np.vectorize
+	def sigmoid(x):
+		return 1.0 / (1.0 + exp(-x))
+
 	def copy(self):
 		c = Perceptron()
 		for mat in self.__weight_matrices:
@@ -63,7 +68,7 @@ class Perceptron:
 				# print self.__states
 				# print self.__weight_matrices
 				# raw_input()
-				self.__states[l+1] = self.__weight_matrices[l] * self.__states[l]
+				self.__states[l+1] = Perceptron.sigmoid(self.__weight_matrices[l] * self.__states[l])
 
 	def get_output(self, which):
 		assert 0 <= which < self.__sizes[-1]
