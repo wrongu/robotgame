@@ -36,6 +36,11 @@ class Perceptron:
 	def sigmoid(x):
 		return 1.0 / (1.0 + exp(-x))
 
+	@staticmethod
+	@np.vectorize
+	def sigmoid_deriv(s):
+		return s * (1.0 - s)
+
 	def copy(self):
 		c = Perceptron()
 		for mat in self.__weight_matrices:
@@ -65,14 +70,20 @@ class Perceptron:
 			self.__states[0] = inpts
 		for i in xrange(iterations):
 			for l in xrange(len(self.__sizes)-1):
-				# print self.__states
-				# print self.__weight_matrices
-				# raw_input()
 				self.__states[l+1] = Perceptron.sigmoid(self.__weight_matrices[l] * self.__states[l])
+
+	def backpropagate(self, target, learning_rate=.01):
+		"""Live update of matrix weights.
+			'target' close to 1.0 reinforce (and 0.0 alter) behavior
+		"""
+		e = target - self.__states[-1]
+		s_d = Perceptron.sigmoid_deriv(self.__states[-1])
+		delta = np.multiply(e, s_d) * self.__states[-2].transpose()
+		self.__weight_matrices[-1] += delta * learning_rate
 
 	def get_output(self, which):
 		assert 0 <= which < self.__sizes[-1]
-		return self.__sizes[which]
+		return self.__states[-1][which]
 
 	def choose_output(self, strict=False):
 		if strict:
