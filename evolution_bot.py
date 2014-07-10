@@ -280,7 +280,12 @@ if __name__ == '__main__':
 		# run 1v1 matches
 		for bot0 in xrange(population):
 			for bot1 in xrange(bot0+1, population):
+				# run 0 vs 1
 				swing = run_match(brains, bot0, bot1)
+				# run 1 vs 0 (left/right symmetry)
+				# subtracting here to maintain score from bot0's perspective
+				swing -= run_match(brains, bot1, bot0)
+				# count scores
 				scores[bot0] += swing
 				scores[bot1] -= swing
 				print "%d vs %d : %d" % (bot0, bot1, swing)

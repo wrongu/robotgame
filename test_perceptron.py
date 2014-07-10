@@ -3,8 +3,8 @@ from evolution_bot import Perceptron, Robot
 from rgkit.run import Runner, Options
 from rgkit.game import Player
 
-bot0 = "brains/perceptron_36_9_10_generation400.dat"
-bot1 = "brains/perceptron_36_9_10_generation500.dat"
+bot0 = "brains/perceptron_36_9_10_generation800.dat"
+bot1 = "brains/perceptron_36_9_10_generation700.dat"
 
 robot0 = Robot()
 robot0.set_brain(Perceptron.load(bot0))
