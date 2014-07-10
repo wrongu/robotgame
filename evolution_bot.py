@@ -300,3 +300,6 @@ if __name__ == '__main__':
 		# add new random bots to population
 		brains.extend([Perceptron(layers, random=True) for _ in xrange(newrandom)])
 		generation += 1
+	
+	best_brain, _ = max(zip(brains, scores), key=lambda tup: tup[1])
+	best_brain.save(save_dir, suffix="_generation%d" % generation)
