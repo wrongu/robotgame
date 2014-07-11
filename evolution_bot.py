@@ -12,24 +12,28 @@ def rand_plus_or_minus():
 class Perceptron:
 
 	def __init__(self, layer_sizes=[], mats=None, random=False, horizontal=False):
-		self.__weight_matrices = mats or []
+		self.__W = mats or []
+		self.__layers = len(layer_sizes)
 		self.__sizes = layer_sizes
 		self.__horizontal = horizontal
-		self.__reset_states()
+		self.__reset_activations()
 		if not mats:
 			for i in range(len(layer_sizes) - 1):
 				fromsize = layer_sizes[i]
 				tosize = layer_sizes[i+1]
 				mat = np.matrix(np.zeros((tosize, fromsize)))
-				self.__weight_matrices.append(mat)
+				self.__W.append(mat)
 		if random:
 			self.mutate(edit=1.0)
 
 	def __str__(self):
-		return "\n".join([str(mat) for mat in self.__weight_matrices])
+		return "\n".join([str(mat) for mat in self.__W])
 
-	def __reset_states(self):
-		self.__states = map(lambda s: np.zeros((s,1)), self.__sizes)
+	def __reset_activations(self):
+		# activations
+		self.__a = map(lambda s: np.zeros((s,1)), self.__sizes)
+		# sum stage (a = sigmoid(z))
+		self.__z  = map(lambda s: np.zeros((s,1)), self.__sizes)
 
 	@staticmethod
 	@np.vectorize
@@ -38,17 +42,22 @@ class Perceptron:
 
 	@staticmethod
 	@np.vectorize
-	def sigmoid_deriv(s):
-		return s * (1.0 - s)
+	def sigmoid_derivy(y):
+		return y * (1.0 - y)
+
+	@staticmethod
+	@np.vectorize
+	def sigmoid_deriv(x):
+		return np.multiply(Perceptron.sigmoid(x), 1.0 - Perceptron.sigmoid(x))
 
 	def copy(self):
 		c = Perceptron()
-		for mat in self.__weight_matrices:
-			c.__weight_matrices.append(mat.copy())
+		for mat in self.__W:
+			c.__W.append(mat.copy())
 		return c
 
 	def mutate(self, edit=0.001):
-		for mat in self.__weight_matrices:
+		for mat in self.__W:
 			changes = np.matrix([edit*rand_plus_or_minus() for _ in xrange(mat.size)])
 			changes = changes.reshape(mat.shape)
 			mat += changes
@@ -57,50 +66,62 @@ class Perceptron:
 	def set_input(self, which, value):
 		assert -1 <= value <= 1
 		assert 0 <= which < self.__sizes[0]
-		self.__states[0][which] = value
+		self.__a[0][which] = value
 
 	def set_inputs(self, input_vector):
-		self.__states[0] = input_vector
+		self.__a[0] = input_vector
 
-	def propagate(self, clear=True, iterations=1):
+	def propagate(self, iterations=1):
 		if not self.__horizontal: iterations = 1
-		if clear:
-			inpts = self.__states[0]
-			self.__reset_states()
-			self.__states[0] = inpts
 		for i in xrange(iterations):
-			for l in xrange(len(self.__sizes)-1):
-				self.__states[l+1] = Perceptron.sigmoid(self.__weight_matrices[l] * self.__states[l])
+			for l in xrange(self.__layers-1):
+				self.__z[l+1]  = self.__W[l] * self.__a[l]
+				self.__a[l+1] = Perceptron.sigmoid(self.__z[l+1])
 
-	def backpropagate(self, target, learning_rate=.01):
+	def backpropagate(self, target, learning_rate=.2):
 		"""Live update of matrix weights.
 			'target' close to 1.0 reinforce (and 0.0 alter) behavior
 		"""
-		e = target - self.__states[-1]
-		s_d = Perceptron.sigmoid_deriv(self.__states[-1])
-		delta = np.multiply(e, s_d) * self.__states[-2].transpose()
-		self.__weight_matrices[-1] += delta * learning_rate
+		# e = target - self.__a[-1]
+		# s_d = Perceptron.sigmoid_derivy(self.__a[-1])
+		# delta = np.multiply(e, s_d) * self.__a[-2].transpose()
+		# self.__W[-1] += delta * learning_rate
+		#########
+		# step 1: compute errors at each layer
+		#########
+		errors = [None] * self.__layers
+		L = self.__layers - 1 # L is highest layer index
+		# error in last layer is defined by targets
+		errors[L] = np.multiply(self.__a[L] - target, Perceptron.sigmoid_derivy(self.__a[L]))
+		# propagate error backwards through the network
+		for l in range(L-1, 0, -1):
+			errors[l] = np.multiply(self.__W[l].transpose() * errors[l+1], Perceptron.sigmoid_derivy(self.__a[l]))
+		#########
+		# step 2: update matrix weights based on errors
+		#########
+		for l in range(L):
+			self.__W[l] -= learning_rate * (errors[l+1] * self.__a[l].transpose())
 
 	def get_output(self, which):
 		assert 0 <= which < self.__sizes[-1]
-		return self.__states[-1][which]
+		return self.__a[-1][which]
 
 	def choose_output(self, strict=False):
 		if strict:
 			maxi = 0
-			maxv = self.__states[-1][0]
+			maxv = self.__a[-1][0]
 			for i in xrange(1, self.__sizes[-1]):
-				if self.__states[-1][i] > maxv:
-					maxv = self.__states[-1][i]
+				if self.__a[-1][i] > maxv:
+					maxv = self.__a[-1][i]
 					maxi = i
 			return maxi, maxv
 		else:
-			summed = self.__states[-1].cumsum(1)
+			summed = self.__a[-1].cumsum(1)
 			index = random.random() * summed[-1]
 			for i in xrange(0, self.__sizes[-1]):
 				if index <= summed[i]:
-					return i, self.__states[-1][i]
-			return i, self.__states[-1][i]
+					return i, self.__a[-1][i]
+			return i, self.__a[-1][i]
 
 	@staticmethod
 	def mate(p0, p1):
@@ -108,10 +129,10 @@ class Perceptron:
 		assert p0.__horizontal == p1.__horizontal
 		newp = Perceptron(layer_sizes=p0.__sizes, horizontal=p0.__horizontal)
 		for l in xrange(len(newp.__sizes)-1):
-			rows, cols = newp.__weight_matrices[l].shape
+			rows, cols = newp.__W[l].shape
 			for r in xrange(rows):
 				for c in xrange(cols):
-					newp.__weight_matrices[l][(r,c)] = random.choice([p0.__weight_matrices[l][(r,c)], p1.__weight_matrices[l][(r,c)]])
+					newp.__W[l][(r,c)] = random.choice([p0.__W[l][(r,c)], p1.__W[l][(r,c)]])
 		return newp
 
 	@staticmethod
@@ -125,7 +146,7 @@ class Perceptron:
 			mat_text = re.sub(r"\[\[", "", mat_text)
 			mat_text = re.sub(r"\]\s+\[", ";\n", mat_text)
 			matstrings = mat_text.split("]]")
-			p.__weight_matrices = [np.matrix(s) for s in matstrings]
+			p.__W = [np.matrix(s) for s in matstrings]
 		return p
 
 	def save(self, directory, suffix=""):
