@@ -2,6 +2,7 @@
 import os
 import re
 import random
+import itertools
 import numpy as np
 from   math  import exp
 from   rgkit import rg
@@ -9,7 +10,7 @@ from   rgkit import rg
 def rand_plus_or_minus():
 	return (random.random() * 2.0) - 1.0
 
-class Perceptron:
+class Perceptron(object):
 
 	def __init__(self, layer_sizes=[], mats=None, random=False, horizontal=False):
 		self.__W = mats or []
@@ -123,11 +124,11 @@ class Perceptron:
 					return i, self.__a[-1][i]
 			return i, self.__a[-1][i]
 
-	@staticmethod
-	def mate(p0, p1):
+	@classmethod
+	def mate(cls, p0, p1):
 		assert p0.__sizes == p1.__sizes
 		assert p0.__horizontal == p1.__horizontal
-		newp = Perceptron(layer_sizes=p0.__sizes, horizontal=p0.__horizontal)
+		newp = cls(layer_sizes=p0.__sizes, horizontal=p0.__horizontal)
 		for l in xrange(len(newp.__sizes)-1):
 			rows, cols = newp.__W[l].shape
 			for r in xrange(rows):
@@ -135,12 +136,12 @@ class Perceptron:
 					newp.__W[l][(r,c)] = random.choice([p0.__W[l][(r,c)], p1.__W[l][(r,c)]])
 		return newp
 
-	@staticmethod
-	def load(file_path):
+	@classmethod
+	def load(cls, file_path):
 		p = None
 		with open(file_path, "r") as f:
 			sizes = [int(n) for n in f.readline().split()]
-			p = Perceptron(sizes, random=False)
+			p = cls(sizes, random=False)
 			mat_text = f.read()
 			# parse numpy output back into matrices
 			mat_text = re.sub(r"\[\[", "", mat_text)
@@ -162,7 +163,7 @@ def action_is_valid(act):
 		return False
 	return True
 
-class Robot:
+class Robot(object):
 
 	width = 3
 	halfwidth = width / 2
@@ -236,6 +237,120 @@ class Robot:
 		if not action_is_valid(blind_choice): return ['guard']
 		return blind_choice
 
+class ScoredPerceptron(Perceptron):
+
+	def __init__(self, *args, **kwargs):
+		super(ScoredPerceptron, self).__init__(*args, **kwargs)
+		self._score = 0
+
+	def reset_score(self):
+		self._score = 0
+
+	def update_score(self, delta):
+		self._score += delta
+
+	def get_score(self):
+		return self._score
+
+	def mutate(self, edit=0.001):
+		super(ScoredPerceptron, self).mutate(edit)
+		self.reset_score()
+
+class Population(object):
+
+	def __init__(self, *ba, **bka):
+		self.__ba = ba
+		self.__bka = bka
+		self._generation = 0
+
+	def make_brain(self):
+		return ScoredPerceptron(*self.__ba, **self.__bka)
+
+	def save_best(self, dest, extra=""):
+		_, best_brain = max(zip(self._scores, self._brains))
+		best_brain.save(dest, "%s_generation%d" % (extra, self._generation))
+
+	def get_generation(self):
+		return self._generation
+
+	@staticmethod
+	def choose_brain(brain_list, strict=False):
+		if strict:
+			return max(brain_list, key=lambda brain: brain.get_score())
+		else:
+			# weighted choice based on score
+			scores = [brain.get_score() for brain in brain_list]
+			weights = [1.0 / (1 + exp(-s / (max(scores)+0.1))) for s in scores]
+			idx = random.random() * sum(weights)
+			s = 0.0
+			for i in xrange(len(brain_list)):
+				s += weights[i]
+				if s >= idx:
+					return brain_list[i]
+
+class Individuals(Population):
+	"""Mutate each brain in isolation
+	"""
+	def __init__(self, size, new_random, mutation_rate, *brain_args, **brain_kwargs):
+		super(Individuals, self).__init__(*brain_args, **brain_kwargs)
+		self._brains = [self.make_brain() for _ in xrange(size)]
+		self._new_random = new_random
+		self._mutate = mutation_rate
+
+	def get_matches(self):
+		for i in xrange(len(self._brains)):
+			for j in xrange(i+1, len(self._brains)):
+				yield (self._brains[i], self._brains[j])
+
+	def next_generation(self):
+		self._generation += 1
+		self._brains = [Population.choose_brain(self._brains).mutate(self._mutate) for _ in xrange(len(self._brains) - self._new_random)]
+		self._brains.extend([self.make_brain() for _ in xrange(self._new_random)])
+
+class Family(Population):
+	"""Cross together fittest from population
+	"""
+	def __init__(self, size, new_random, mutation_rate, *brain_args, **brain_kwargs):
+		super(Family, self).__init__(*brain_args, **brain_kwargs)
+		self._brains = [self.make_brain() for _ in xrange(size)]
+		self._new_random = new_random
+		self._mutate = mutation_rate
+
+	def get_matches(self):
+		for i in xrange(len(self._brains)):
+			for j in xrange(i+1, len(self._brains)):
+				yield (self._brains[i], self._brains[j])
+
+	def next_generation(self):
+		self._generation += 1
+		self._brains = [Perceptron.mate(
+			self.choose_brain(self._brains),
+			self.choose_brain(self._brains)).mutate(self._mutate)
+			for _ in xrange(len(self._brains) - self._new_random)]
+		self._brains.extend([self.make_brain() for _ in xrange(self._new_random)])
+
+class Teams(Population):
+	"""Two families against each other
+	"""
+	def __init__(self, team_size, new_random, mutation_rate, *brain_args, **brain_kwargs):
+		super(Teams, self).__init__(brain_args, brain_kwargs)
+		self._red_team = Family(team_size, new_random, mutation_rate)
+		self._blu_team = Family(team_size, new_random, mutation_rate)
+
+	def get_matches(self):
+		for r in self._red_team._brains:
+			for b in self._blu_team._brains:
+				yield (r, b)
+
+	def next_generation(self):
+		self._generation += 1
+		self._red_team.next_generation()
+		self._blu_team.next_generation()
+
+	def save_best(self, dest, extra=""):
+		self._red_team.save_best(dest, "_red"+extra)
+		self._red_team.save_best(dest, "_blu"+extra)
+
 # tournament
 if __name__ == '__main__':
 	from rgkit.run import Options, Runner
@@ -250,9 +365,11 @@ if __name__ == '__main__':
 	parser.add_option("-r", "--random",        type="int",   dest="random",       default=1,    help="number of random brains to add each generation")
 	parser.add_option("-m", "--mutation-rate", type="float", dest="mutationrate", default=0.01, help="mutation rate")
 	parser.add_option("-o", "--output-dir",    type="string",dest="savedir",      default="brains", help="directory to save brains")
+	parser.add_option("-t", "--pop-type",      type="string",dest="pop_type",     default="Family", help="population type (Individual, Family, Team)")
+	parser.add_option("-l", "--load-file",     type="string",dest="load_file",     help="path to a file containing paths to brains on each line. This is an alternative to naming each file in the args")
 	(options, leftover_args) = parser.parse_args()
 
-	population = options.population
+	popsize = options.population
 	newrandom = options.random
 	ngames = options.ngames
 	mutation_rate = options.mutationrate
@@ -263,75 +380,71 @@ if __name__ == '__main__':
 
 	random.seed(rand_seed)
 
-	# load brains from any files left after opts have been parsed
-	brains = []
+	load_brains = []
 	for arg in leftover_args:
 		try:
-			loaded = Perceptron.load(arg)
-			if loaded is not None:
-				brains.append(loaded)
-		except: pass
+			p = ScoredPerceptron.load(arg)
+			if p is not None:
+				load_brains.append(p)
+		except:
+			print "could not load brain from file '%s'" % (arg)
 
-	# fill rest of brain array with random brains
-	layers = [Robot.inputs] + Robot.layers + [Robot.outputs]
-	while len(brains) < population:
-		brains .append(Perceptron(layers, random=True))
-	scores = [0.0] * population
+	if options.load_file:
+		with open(options.load_file, 'r') as f:
+			fnames = f.readlines()
+		for f in fnames:
+			try:
+				p = ScoredPerceptron.load(f)
+				if p is not None:
+					load_brains.append(p)
+			except:
+				print "could not load brain from file '%s'" % (f)
 
-	def run_match(brains, id0, id1):
+	brain_construction = {
+		"layer_sizes" : [Robot.inputs] + Robot.layers + [Robot.outputs]
+	}
+
+	population = Individuals(popsize, newrandom, mutation_rate, **brain_construction)
+	if options.pop_type:
+		if options.pop_type.lower() == "individuals":
+			population = Individuals(popsize, newrandom, mutation_rate, **brain_construction)
+		elif options.pop_type.lower() == "family":
+			population = Family(popsize, newrandom, mutation_rate, **brain_construction)
+		elif options.pop_type.lower() == "teams":
+			population = Teams(popsize/2, newrandom, mutation_rate, **brain_construction)
+		else:
+			print "unkown population type '%s'" % options.pop_type
+
+	def run_match(brain0, brain1):
 		r0 = Robot()
-		r0.set_brain(brains[id0])
+		r0.set_brain(brain0)
 		p0 = Player(robot=r0)
 		r1 = Robot()
-		r1.set_brain(brains[id1])
+		r1.set_brain(brain1)
 		p1 = Player(robot=r1)
 
-		opts = Options(n_of_games=ngames, game_seed=generation + rand_seed)
+		opts = Options(n_of_games=ngames, game_seed=population.get_generation() + rand_seed)
 		r = Runner(players=[p0, p1], options=opts)
 		results = r.run()
 		swing = 0
 		for res in results:
 			swing += res[0] - res[1]
-		return swing
+		brain0.update_score(swing)
+		brain1.update_score(-swing)
 
-	def choose_brain(brains, scores):
-		# weighted choice based on score
-		weights = [1.0 / (1 + exp(-s / (max(scores)+0.1))) for s in scores]
-		idx = random.random() * sum(weights)
-		s = 0.0
-		for i in xrange(population):
-			s += weights[i]
-			if s >= idx:
-				return brains[i]
-
-	generation = 0
-	while generation < max_generation:
-		print "--- generation %d ---" % generation
-		scores = [0.0] * population
+	while population.get_generation() < max_generation:
+		print "--- generation %d ---" % population.get_generation()
 
 		# run 1v1 matches
-		for bot0 in xrange(population):
-			for bot1 in xrange(bot0+1, population):
-				# run 0 vs 1
-				swing = run_match(brains, bot0, bot1)
-				# run 1 vs 0 (left/right symmetry)
-				# subtracting here to maintain score from bot0's perspective
-				swing -= run_match(brains, bot1, bot0)
-				# count scores
-				scores[bot0] += swing
-				scores[bot1] -= swing
-				print "%d vs %d : %d" % (bot0, bot1, swing)
+		for (brain0, brain1) in population.get_matches():	
+			# run 0 vs 1
+			run_match(brain0, brain1)
+			# run 1 vs 0 (left/right symmetry)
+			run_match(brain1, brain0)
 
-		if generation % save_every == 0:
-			best_brain, _ = max(zip(brains, scores), key=lambda tup: tup[1])
-			best_brain.save(save_dir, suffix="_generation%d" % generation)
-
-		# select winners for mutation
-		brains = [Perceptron.mate(choose_brain(brains, scores), choose_brain(brains, scores)).mutate(mutation_rate) for _ in xrange(population - newrandom)]
-		
-		# add new random bots to population
-		brains.extend([Perceptron(layers, random=True) for _ in xrange(newrandom)])
-		generation += 1
+		if population.get_generation() % save_every == 0:
+			population.save_best(options.savedir)
 	
-	best_brain, _ = max(zip(brains, scores), key=lambda tup: tup[1])
-	best_brain.save(save_dir, suffix="_generation%d" % generation)
+	# save at the end also
+	population.save_best(options.savedir)
+
