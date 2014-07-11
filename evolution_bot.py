@@ -2,7 +2,6 @@
 import os
 import re
 import random
-import itertools
 import numpy as np
 from   math  import exp
 from   rgkit import rg
@@ -52,7 +51,7 @@ class Perceptron(object):
 		return np.multiply(Perceptron.sigmoid(x), 1.0 - Perceptron.sigmoid(x))
 
 	def copy(self):
-		c = Perceptron()
+		c = self.__class__(self.__sizes)
 		for mat in self.__W:
 			c.__W.append(mat.copy())
 		return c
@@ -124,6 +123,9 @@ class Perceptron(object):
 					return i, self.__a[-1][i]
 			return i, self.__a[-1][i]
 
+	def get_output_vector(self):
+		return self.__a[-1]
+
 	@classmethod
 	def mate(cls, p0, p1):
 		assert p0.__sizes == p1.__sizes
@@ -163,27 +165,69 @@ def action_is_valid(act):
 		return False
 	return True
 
-class Robot(object):
+class RobotPopulation(object):
 
 	width = 3
 	halfwidth = width / 2
 	inputs = (width ** 2) * 4 # 4 = {ally hp, enemy hp, spawn, obstacle}
 	outputs = 10 # 4 attack, 4 move, suicide, guard
 	layers = [width**2]
+	selfishness = 0.5
 
-	def global_init(self):
-		if not hasattr(self, 'brain'):
-			self.brain = Perceptron([Robot.inputs] + Robot.layers + [Robot.outputs])
+	def __init__(self, pop):
+		self.population = pop
 
-	def set_brain(self, brain):
-		self.brain = brain
+	def population_init(self):
+		if not hasattr(self, 'bot_states'):
+			# map from robot id to state, where state has 'brain', 'last_hp', 'last_output', and 'last_choice'
+			self.bot_states = {}
+
+	def population_update(self, game):
+		id_map =  {bot.robot_id: bot for bot in game.robots.values() if bot.player_id == self.player_id}
+		enemies = [bot for bot in game.robots.values() if bot.player_id != self.player_id]
+		team_score = len(id_map) - len(enemies)
+		# learn from last frame
+		delete_list = []
+		for r_id, state in self.bot_states.iteritems():
+			brain = state["brain"]
+			output = state["last_output"]
+			choice = state["last_choice"]
+			if output is not None:
+				if r_id not in id_map:
+					selfish_score = -rg.settings.robot_hp
+					delete_list.append(r_id)
+				else:
+					# still alive. selfish score is good if health was retained
+					new_hp  = id_map[r_id]['hp']
+					selfish_score = new_hp - state['last_hp']
+					state['last_hp'] = new_hp
+				s = RobotPopulation.selfishness
+				decision_score = Perceptron.sigmoid(selfish_score * s + team_score * (1-s))
+				brain.update_score(decision_score - 0.5)
+				output[choice] = decision_score
+				brain.backpropagate(output)
+		for r_id in delete_list:
+			del self.bot_states[r_id]
+
+		# add new brains
+		for loc, bot in game.robots.iteritems():
+			if bot.player_id == self.player_id and bot.robot_id not in self.bot_states:
+				self.bot_states[bot.robot_id] = {
+					"last_hp" : bot.hp,
+					"brain": self.population.next_brain(),
+					"last_output": None,
+					"last_choice": None
+				}
+
+	def set_population(self, pop):
+		self.population = pop
 
 	def construct_features(self, game):
 		xc, yc = self.location
-		features = np.zeros((Robot.inputs,1))
+		features = np.zeros((RobotPopulation.inputs,1))
 		i = 0
-		for x in xrange(xc - Robot.halfwidth, xc + Robot.halfwidth + 1):
-			for y in xrange(yc - Robot.halfwidth, yc + Robot.halfwidth + 1):
+		for x in xrange(xc - RobotPopulation.halfwidth, xc + RobotPopulation.halfwidth + 1):
+			for y in xrange(yc - RobotPopulation.halfwidth, yc + RobotPopulation.halfwidth + 1):
 				bot = game.robots.get((x,y))
 				if bot == None:
 					features[(i, 0)] = 0.0
@@ -196,37 +240,25 @@ class Robot(object):
 				i += 4
 		return features
 
+class Robot(RobotPopulation):
+
 	def act(self, game):
-		self.global_init()
+		self.population_init()
+		self.population_update(game)
 		
 		x,y = self.location
 
 		features = self.construct_features(game)
-		
-		st = ""
-		for yi in xrange(y-Robot.halfwidth, y+Robot.halfwidth+1):
-			for xi in xrange(x-Robot.halfwidth, x+Robot.halfwidth+1):
-				if 'invalid' in rg.loc_types((xi,yi)):
-					st += " X "
-				elif 'obstacle' in rg.loc_types((xi,yi)):
-					st += " # "
-				elif (xi,yi) in game.robots:
-					if game.robots[(xi,yi)].player_id == self.player_id:
-						st += " A "
-					else:
-						st += " E "
-				else:
-					st += "   "
-			st += "\n"
-		# print st
-		# print features
-		# raw_input()
 
+		state = self.bot_states[self.robot_id]
+		brain = state["brain"]
 
-		self.brain.set_inputs(features)
-		self.brain.propagate()
+		brain.set_inputs(features)
+		brain.propagate()
 
-		index, value = self.brain.choose_output(strict=False)
+		index, value = brain.choose_output(strict=False)
+		self.bot_states[self.robot_id]["last_output"] = brain.get_output_vector()
+		self.bot_states[self.robot_id]["last_choice"] = index
 
 		choices = [
 			['move', (x-1, y)],   ['move', (x+1, y)],   ['move', (x, y-1)],   ['move', (x, y+1)],
@@ -255,101 +287,89 @@ class ScoredPerceptron(Perceptron):
 	def mutate(self, edit=0.001):
 		super(ScoredPerceptron, self).mutate(edit)
 		self.reset_score()
+		return self
 
 class Population(object):
 
-	def __init__(self, *ba, **bka):
-		self.__ba = ba
+	def __init__(self, size, new_random, **bka):
 		self.__bka = bka
-		self._generation = 0
+		self.__size = size
+		self.__new_random = new_random
+		self.generation = 0
 
 	def make_brain(self):
-		return ScoredPerceptron(*self.__ba, **self.__bka)
+		return ScoredPerceptron(**self.__bka)
 
 	def save_best(self, dest, extra=""):
-		_, best_brain = max(zip(self._scores, self._brains))
-		best_brain.save(dest, "%s_generation%d" % (extra, self._generation))
+		best_brain = max(self.brains, key=lambda b: b.get_score())
+		best_brain.save(dest, "%s_generation%d" % (extra, self.generation))
+
+	def next_generation(self):
+		self.generation += 1
+		self.brains = [self.next_brain() for _ in xrange(self.__size - self.__new_random)]
+		self.brains.extend([self.make_brain() for _ in xrange(self.__new_random)])
 
 	def get_generation(self):
-		return self._generation
+		return self.generation
 
-	@staticmethod
-	def choose_brain(brain_list, strict=False):
+	def choose_brain(self, strict=False):
 		if strict:
-			return max(brain_list, key=lambda brain: brain.get_score())
+			return max(self.brains, key=lambda brain: brain.get_score())
 		else:
 			# weighted choice based on score
-			scores = [brain.get_score() for brain in brain_list]
-			weights = [1.0 / (1 + exp(-s / (max(scores)+0.1))) for s in scores]
+			scores = [brain.get_score() for brain in self.brains]
+			divisor = max([abs(s) for s in scores]) + 1.0
+			weights = [1.0 / (1 + exp(-s / divisor)) for s in scores]
 			idx = random.random() * sum(weights)
 			s = 0.0
-			for i in xrange(len(brain_list)):
+			for i in xrange(len(self.brains)):
 				s += weights[i]
 				if s >= idx:
-					return brain_list[i]
+					return self.brains[i]
 
 class Individuals(Population):
 	"""Mutate each brain in isolation
 	"""
-	def __init__(self, size, new_random, mutation_rate, *brain_args, **brain_kwargs):
-		super(Individuals, self).__init__(*brain_args, **brain_kwargs)
-		self._brains = [self.make_brain() for _ in xrange(size)]
-		self._new_random = new_random
+	def __init__(self, size, new_random, mutation_rate, seed_pop=[], **brain_kwargs):
+		super(Individuals, self).__init__(size, new_random, **brain_kwargs)
+		self.brains = (seed_pop + [self.make_brain() for _ in xrange(size)])[0:size]
 		self._mutate = mutation_rate
 
-	def get_matches(self):
-		for i in xrange(len(self._brains)):
-			for j in xrange(i+1, len(self._brains)):
-				yield (self._brains[i], self._brains[j])
-
-	def next_generation(self):
-		self._generation += 1
-		self._brains = [Population.choose_brain(self._brains).mutate(self._mutate) for _ in xrange(len(self._brains) - self._new_random)]
-		self._brains.extend([self.make_brain() for _ in xrange(self._new_random)])
+	def next_brain(self):
+		next = self.choose_brain().mutate(self._mutate)
+		self.brains.append(next)
+		return next
 
 class Family(Population):
 	"""Cross together fittest from population
 	"""
-	def __init__(self, size, new_random, mutation_rate, *brain_args, **brain_kwargs):
-		super(Family, self).__init__(*brain_args, **brain_kwargs)
-		self._brains = [self.make_brain() for _ in xrange(size)]
-		self._new_random = new_random
+	def __init__(self, size, new_random, mutation_rate, seed_pop=[], **brain_kwargs):
+		super(Family, self).__init__(size, new_random, **brain_kwargs)
+		self.brains = (seed_pop + [self.make_brain() for _ in xrange(size)])[0:size]
 		self._mutate = mutation_rate
 
-	def get_matches(self):
-		for i in xrange(len(self._brains)):
-			for j in xrange(i+1, len(self._brains)):
-				yield (self._brains[i], self._brains[j])
+	def next_brain(self):
+		next = ScoredPerceptron.mate(self.choose_brain(), self.choose_brain()).mutate(self._mutate)
+		self.brains.append(next)
+		return next
 
-	def next_generation(self):
-		self._generation += 1
-		self._brains = [Perceptron.mate(
-			self.choose_brain(self._brains),
-			self.choose_brain(self._brains)).mutate(self._mutate)
-			for _ in xrange(len(self._brains) - self._new_random)]
-		self._brains.extend([self.make_brain() for _ in xrange(self._new_random)])
-
-class Teams(Population):
-	"""Two families against each other
-	"""
-	def __init__(self, team_size, new_random, mutation_rate, *brain_args, **brain_kwargs):
-		super(Teams, self).__init__(brain_args, brain_kwargs)
-		self._red_team = Family(team_size, new_random, mutation_rate)
-		self._blu_team = Family(team_size, new_random, mutation_rate)
+class Tournament(object):
+	def __init__(self, population_class, team_size, new_random, mutation_rate, **brain_kwargs):
+		self.red_team = population_class(team_size, new_random, mutation_rate, **brain_kwargs)
+		self.blu_team = population_class(team_size, new_random, mutation_rate, **brain_kwargs)
 
 	def get_matches(self):
-		for r in self._red_team._brains:
-			for b in self._blu_team._brains:
+		for r in self.red_team.brains:
+			for b in self.blu_team.brains:
 				yield (r, b)
 
 	def next_generation(self):
-		self._generation += 1
-		self._red_team.next_generation()
-		self._blu_team.next_generation()
+		self.red_team.next_generation()
+		self.blu_team.next_generation()
 
 	def save_best(self, dest, extra=""):
-		self._red_team.save_best(dest, "_red"+extra)
-		self._red_team.save_best(dest, "_blu"+extra)
+		self.red_team.save_best(dest, "_red"+extra)
+		self.blu_team.save_best(dest, "_blu"+extra)
 
 # tournament
 if __name__ == '__main__':
@@ -363,20 +383,21 @@ if __name__ == '__main__':
 	parser.add_option("-n", "--ngames",        type="int",   dest="ngames",       default=1,    help="number of games per generation")
 	parser.add_option("-p", "--population",    type="int",   dest="population",   default=8,    help="population size")
 	parser.add_option("-r", "--random",        type="int",   dest="random",       default=1,    help="number of random brains to add each generation")
+	parser.add_option("-e", "--save-every",    type="int",   dest="save_every",   default=100,  help="generations between saves")
 	parser.add_option("-m", "--mutation-rate", type="float", dest="mutationrate", default=0.01, help="mutation rate")
 	parser.add_option("-o", "--output-dir",    type="string",dest="savedir",      default="brains", help="directory to save brains")
 	parser.add_option("-t", "--pop-type",      type="string",dest="pop_type",     default="Family", help="population type (Individual, Family, Team)")
 	parser.add_option("-l", "--load-file",     type="string",dest="load_file",     help="path to a file containing paths to brains on each line. This is an alternative to naming each file in the args")
 	(options, leftover_args) = parser.parse_args()
 
-	popsize = options.population
-	newrandom = options.random
+	pop_size = options.population
+	new_random = options.random
 	ngames = options.ngames
 	mutation_rate = options.mutationrate
 	max_generation = options.generations
 	rand_seed = options.seed
 	save_dir = options.savedir
-	save_every = 100
+	save_every = options.save_every
 
 	random.seed(rand_seed)
 
@@ -401,50 +422,42 @@ if __name__ == '__main__':
 				print "could not load brain from file '%s'" % (f)
 
 	brain_construction = {
-		"layer_sizes" : [Robot.inputs] + Robot.layers + [Robot.outputs]
+		"layer_sizes" : [RobotPopulation.inputs] + RobotPopulation.layers + [RobotPopulation.outputs],
+		"random" : True
 	}
-
-	population = Individuals(popsize, newrandom, mutation_rate, **brain_construction)
 	if options.pop_type:
 		if options.pop_type.lower() == "individuals":
-			population = Individuals(popsize, newrandom, mutation_rate, **brain_construction)
+			population = Individuals
 		elif options.pop_type.lower() == "family":
-			population = Family(popsize, newrandom, mutation_rate, **brain_construction)
-		elif options.pop_type.lower() == "teams":
-			population = Teams(popsize/2, newrandom, mutation_rate, **brain_construction)
+			population = Family
 		else:
 			print "unkown population type '%s'" % options.pop_type
 
-	def run_match(brain0, brain1):
-		r0 = Robot()
-		r0.set_brain(brain0)
+	tournament = Tournament(population, pop_size, new_random, mutation_rate, **brain_construction)
+
+	def run_match(pop0, pop1):
+		r0 = Robot(pop0)
 		p0 = Player(robot=r0)
-		r1 = Robot()
-		r1.set_brain(brain1)
+		r1 = Robot(pop1)
 		p1 = Player(robot=r1)
 
-		opts = Options(n_of_games=ngames, game_seed=population.get_generation() + rand_seed)
+		opts = Options(n_of_games=ngames, game_seed=pop0.get_generation() + rand_seed)
 		r = Runner(players=[p0, p1], options=opts)
 		results = r.run()
 		swing = 0
 		for res in results:
 			swing += res[0] - res[1]
-		brain0.update_score(swing)
-		brain1.update_score(-swing)
+		return swing
 
-	while population.get_generation() < max_generation:
-		print "--- generation %d ---" % population.get_generation()
+	g = 0
+	while g < max_generation:
+		g += 1
+		print "--- generation %d ---" % g
 
 		# run 1v1 matches
-		for (brain0, brain1) in population.get_matches():	
-			# run 0 vs 1
-			run_match(brain0, brain1)
-			# run 1 vs 0 (left/right symmetry)
-			run_match(brain1, brain0)
+		run_match(tournament.red_team, tournament.blu_team)
 
-		if population.get_generation() % save_every == 0:
-			population.save_best(options.savedir)
-	
-	# save at the end also
-	population.save_best(options.savedir)
+		if g % save_every == 0:
+			tournament.save_best(options.savedir)
 
+		tournament.next_generation()
