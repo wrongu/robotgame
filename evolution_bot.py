@@ -116,10 +116,10 @@ class Perceptron(object):
 					maxi = i
 			return maxi, maxv
 		else:
-			summed = self.__a[-1].cumsum(1)
-			index = random.random() * summed[-1]
+			summed = self.__a[-1].cumsum()
+			index = random.random() * summed.item(-1)
 			for i in xrange(0, self.__sizes[-1]):
-				if index <= summed[i]:
+				if index <= summed.item(i):
 					return i, self.__a[-1][i]
 			return i, self.__a[-1][i]
 
@@ -165,62 +165,92 @@ def action_is_valid(act):
 		return False
 	return True
 
+def locs_around_55(loc):
+	xc,yc = loc
+	for x in xrange(xc-2,xc+3):
+		for y in xrange(yc-2,yc+3):
+			typ = rg.loc_types((x,y))
+			if "invalid" not in typ and "obstacle" not in typ:
+				yield (x,y)
+def get_enemies_around(bot, game):
+	for pos in locs_around_55(bot.location):
+		if pos in game.robots and game.robots[pos].player_id != bot.player_id:
+			yield game.robots[pos]
+
 class RobotPopulation(object):
 
-	width = 3
+	width = 5
 	halfwidth = width / 2
 	inputs = (width ** 2) * 4 # 4 = {ally hp, enemy hp, spawn, obstacle}
-	outputs = 10 # 4 attack, 4 move, suicide, guard
+	outputs = 9 # 4 attack, 4 move, guard, suicide (suicide removed temporarily)
 	layers = [width**2]
-	selfishness = 0.5
+	selfishness = 1.0
 
 	def __init__(self, pop):
 		self.population = pop
 
 	def population_init(self):
 		if not hasattr(self, 'bot_states'):
-			# map from robot id to state, where state has 'brain', 'last_hp', 'last_output', and 'last_choice'
+			# map from robot id to state, where state has 'brain', 'bot', 'last_hp', 'enemies', 'last_output', and 'last_choice'
 			self.bot_states = {}
+			self.last_update = -1
 
 	def population_update(self, game):
-		id_map =  {bot.robot_id: bot for bot in game.robots.values() if bot.player_id == self.player_id}
-		enemies = [bot for bot in game.robots.values() if bot.player_id != self.player_id]
-		team_score = len(id_map) - len(enemies)
-		# learn from last frame
-		delete_list = []
-		for r_id, state in self.bot_states.iteritems():
-			brain = state["brain"]
-			output = state["last_output"]
-			choice = state["last_choice"]
-			if output is not None:
-				if r_id not in id_map:
-					selfish_score = -rg.settings.robot_hp
-					delete_list.append(r_id)
-				else:
-					# still alive. selfish score is good if health was retained
-					new_hp  = id_map[r_id]['hp']
-					selfish_score = new_hp - state['last_hp']
-					state['last_hp'] = new_hp
-				s = RobotPopulation.selfishness
-				decision_score = Perceptron.sigmoid(selfish_score * s + team_score * (1-s))
-				brain.update_score(decision_score - 0.5)
-				output[choice] = decision_score
-				brain.backpropagate(output)
-		for r_id in delete_list:
-			del self.bot_states[r_id]
+		if self.last_update < game.turn:
+			self.last_update = game.turn
+			bots_by_id = {bot.robot_id: bot for bot in game.robots.values() if bot.player_id == self.player_id}
+			if (game.turn + 1) % 100 == 0:
+				self.population.save_best("brains55", extra="_pop%d_turn%5d" % (self.player_id, game.turn+1))
+				self.population.next_generation()
+			else:
+				enemies = [bot for bot in game.robots.values() if bot.player_id != self.player_id]
+				team_score = (len(bots_by_id) - len(enemies)) / rg.settings.spawn_per_player
+				# learn from last frame
+				delete_list = []
+				for r_id, state in self.bot_states.iteritems():
+					brain = state["brain"]
+					prev_output = state["last_output"]
+					prev_choice = state["last_choice"]
+					bot = state["bot"]
+					enemies = state["enemies"]
+					# output is None if the robot was just spawned
+					if prev_output is not None:
+						# here we calculate the effectiveness of the previous decision,
+						# then run the learning algorithm to enforce or punish that behaviour
+						prev_enemy_hp = sum(b.hp for b in enemies)
+						state["enemies"] = get_enemies_around(bot, game)
+						enemies = state["enemies"]
+						curr_enemy_hp = sum(b.hp for b in enemies)
+						# this should enforce fleeing or attacking. positive score when enemies lose health
+						selfish_score = float(prev_enemy_hp - curr_enemy_hp) / float(rg.settings.attack_range[1])
+						if r_id not in bots_by_id:
+							# if died, detract from selfish score
+							selfish_score -= 1.0
+							delete_list.append(r_id)
+						else:
+							# still alive. selfish score is good if health was retained
+							new_hp  = bots_by_id[r_id]["hp"]
+							selfish_score += (new_hp - state["last_hp"]) / rg.settings.robot_hp
+							state["last_hp"] = new_hp
+						s = RobotPopulation.selfishness
+						decision_score = Perceptron.sigmoid(selfish_score * s + team_score * (1-s))
+						brain.update_score(decision_score)
+						prev_output[prev_choice] += decision_score - 0.5
+						brain.backpropagate(prev_output, learning_rate=0.8)
+				for r_id in delete_list:
+					del self.bot_states[r_id]
 
-		# add new brains
-		for loc, bot in game.robots.iteritems():
-			if bot.player_id == self.player_id and bot.robot_id not in self.bot_states:
-				self.bot_states[bot.robot_id] = {
-					"last_hp" : bot.hp,
-					"brain": self.population.next_brain(),
-					"last_output": None,
-					"last_choice": None
-				}
-
-	def set_population(self, pop):
-		self.population = pop
+			# add new brains
+			for loc, bot in game.robots.iteritems():
+				if bot.player_id == self.player_id and bot.robot_id not in self.bot_states:
+					self.bot_states[bot.robot_id] = {
+						"last_hp" : bot.hp,
+						"brain": self.population.next_brain(),
+						"bot" : bot,
+						"enemies" : [],
+						"last_output": None,
+						"last_choice": None
+					}
 
 	def construct_features(self, game):
 		xc, yc = self.location
@@ -263,8 +293,7 @@ class Robot(RobotPopulation):
 		choices = [
 			['move', (x-1, y)],   ['move', (x+1, y)],   ['move', (x, y-1)],   ['move', (x, y+1)],
 			['attack', (x-1, y)], ['attack', (x+1, y)], ['attack', (x, y-1)], ['attack', (x, y+1)],
-			['guard'],
-			['suicide']]
+			['guard']]
 		blind_choice = choices[index]
 		if not action_is_valid(blind_choice): return ['guard']
 		return blind_choice
@@ -311,6 +340,12 @@ class Population(object):
 
 	def get_generation(self):
 		return self.generation
+
+	def remove_brain(self, brain):
+		if brain in self.brains:
+			self.brains.remove(brain)
+		else:
+			print "could not find brain for removal"
 
 	def choose_brain(self, strict=False):
 		if strict:
@@ -375,6 +410,7 @@ class Tournament(object):
 if __name__ == '__main__':
 	from rgkit.run import Options, Runner
 	from rgkit.game import Player
+	from rgkit.settings import settings as game_settings
 	from optparse import OptionParser
 
 	parser = OptionParser()
@@ -384,6 +420,7 @@ if __name__ == '__main__':
 	parser.add_option("-p", "--population",    type="int",   dest="population",   default=8,    help="population size")
 	parser.add_option("-r", "--random",        type="int",   dest="random",       default=1,    help="number of random brains to add each generation")
 	parser.add_option("-e", "--save-every",    type="int",   dest="save_every",   default=100,  help="generations between saves")
+	parser.add_option("-T", "--turns",         type="int",   dest="turns",        default=100,  help="turns per game")
 	parser.add_option("-m", "--mutation-rate", type="float", dest="mutationrate", default=0.01, help="mutation rate")
 	parser.add_option("-o", "--output-dir",    type="string",dest="savedir",      default="brains", help="directory to save brains")
 	parser.add_option("-t", "--pop-type",      type="string",dest="pop_type",     default="Family", help="population type (Individual, Family, Team)")
@@ -398,6 +435,7 @@ if __name__ == '__main__':
 	rand_seed = options.seed
 	save_dir = options.savedir
 	save_every = options.save_every
+	game_settings["max_turns"] = options.turns
 
 	random.seed(rand_seed)
 
@@ -441,8 +479,8 @@ if __name__ == '__main__':
 		r1 = Robot(pop1)
 		p1 = Player(robot=r1)
 
-		opts = Options(n_of_games=ngames, game_seed=pop0.get_generation() + rand_seed)
-		r = Runner(players=[p0, p1], options=opts)
+		opts = Options(n_of_games=ngames, game_seed=pop0.get_generation() + rand_seed, print_info=True)
+		r = Runner(players=[p0, p1], options=opts, settings=game_settings)
 		results = r.run()
 		swing = 0
 		for res in results:
@@ -457,7 +495,7 @@ if __name__ == '__main__':
 		# run 1v1 matches
 		run_match(tournament.red_team, tournament.blu_team)
 
-		if g % save_every == 0:
+		if save_every != 0 and g % save_every == 0:
 			tournament.save_best(options.savedir)
 
 		tournament.next_generation()
