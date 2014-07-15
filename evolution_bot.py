@@ -1,164 +1,16 @@
 #!/usr/bin/python
 import os
-import re
 import random
 import numpy as np
 from   math  import exp
 from   rgkit import rg
+# these imports are needed for running the evolution tournament
+from rgkit.run import Options, Runner
+from rgkit.game import Player
+from rgkit.settings import settings as game_settings
 
 def rand_plus_or_minus():
 	return (random.random() * 2.0) - 1.0
-
-class Perceptron(object):
-
-	def __init__(self, layer_sizes=[], mats=None, random=False, horizontal=False):
-		self.__W = mats or []
-		self.__layers = len(layer_sizes)
-		self.__sizes = layer_sizes
-		self.__horizontal = horizontal
-		self.__reset_activations()
-		if not mats:
-			for i in range(len(layer_sizes) - 1):
-				fromsize = layer_sizes[i]
-				tosize = layer_sizes[i+1]
-				mat = np.matrix(np.zeros((tosize, fromsize)))
-				self.__W.append(mat)
-		if random:
-			self.mutate(edit=1.0)
-
-	def __str__(self):
-		return "\n".join([str(mat) for mat in self.__W])
-
-	def __reset_activations(self):
-		# activations
-		self.__a = map(lambda s: np.zeros((s,1)), self.__sizes)
-		# sum stage (a = sigmoid(z))
-		self.__z  = map(lambda s: np.zeros((s,1)), self.__sizes)
-
-	@staticmethod
-	@np.vectorize
-	def sigmoid(x):
-		return 1.0 / (1.0 + exp(-x))
-
-	@staticmethod
-	@np.vectorize
-	def sigmoid_derivy(y):
-		return y * (1.0 - y)
-
-	@staticmethod
-	@np.vectorize
-	def sigmoid_deriv(x):
-		return np.multiply(Perceptron.sigmoid(x), 1.0 - Perceptron.sigmoid(x))
-
-	def copy(self):
-		c = self.__class__(self.__sizes)
-		for mat in self.__W:
-			c.__W.append(mat.copy())
-		return c
-
-	def mutate(self, edit=0.001):
-		for mat in self.__W:
-			changes = np.matrix([edit*rand_plus_or_minus() for _ in xrange(mat.size)])
-			changes = changes.reshape(mat.shape)
-			mat += changes
-		return self
-
-	def set_input(self, which, value):
-		assert -1 <= value <= 1
-		assert 0 <= which < self.__sizes[0]
-		self.__a[0][which] = value
-
-	def set_inputs(self, input_vector):
-		self.__a[0] = input_vector
-
-	def propagate(self, iterations=1):
-		if not self.__horizontal: iterations = 1
-		for i in xrange(iterations):
-			for l in xrange(self.__layers-1):
-				self.__z[l+1]  = self.__W[l] * self.__a[l]
-				self.__a[l+1] = Perceptron.sigmoid(self.__z[l+1])
-
-	def backpropagate(self, target, learning_rate=.2):
-		"""Live update of matrix weights.
-			'target' close to 1.0 reinforce (and 0.0 alter) behavior
-		"""
-		# e = target - self.__a[-1]
-		# s_d = Perceptron.sigmoid_derivy(self.__a[-1])
-		# delta = np.multiply(e, s_d) * self.__a[-2].transpose()
-		# self.__W[-1] += delta * learning_rate
-		#########
-		# step 1: compute errors at each layer
-		#########
-		errors = [None] * self.__layers
-		L = self.__layers - 1 # L is highest layer index
-		# error in last layer is defined by targets
-		errors[L] = np.multiply(self.__a[L] - target, Perceptron.sigmoid_derivy(self.__a[L]))
-		# propagate error backwards through the network
-		for l in range(L-1, 0, -1):
-			errors[l] = np.multiply(self.__W[l].transpose() * errors[l+1], Perceptron.sigmoid_derivy(self.__a[l]))
-		#########
-		# step 2: update matrix weights based on errors
-		#########
-		for l in range(L):
-			self.__W[l] -= learning_rate * (errors[l+1] * self.__a[l].transpose())
-
-	def get_output(self, which):
-		assert 0 <= which < self.__sizes[-1]
-		return self.__a[-1][which]
-
-	def choose_output(self, strict=False):
-		if strict:
-			maxi = 0
-			maxv = self.__a[-1][0]
-			for i in xrange(1, self.__sizes[-1]):
-				if self.__a[-1][i] > maxv:
-					maxv = self.__a[-1][i]
-					maxi = i
-			return maxi, maxv
-		else:
-			summed = self.__a[-1].cumsum()
-			index = random.random() * summed.item(-1)
-			for i in xrange(0, self.__sizes[-1]):
-				if index <= summed.item(i):
-					return i, self.__a[-1][i]
-			return i, self.__a[-1][i]
-
-	def get_output_vector(self):
-		return self.__a[-1]
-
-	@classmethod
-	def mate(cls, p0, p1):
-		assert p0.__sizes == p1.__sizes
-		assert p0.__horizontal == p1.__horizontal
-		newp = cls(layer_sizes=p0.__sizes, horizontal=p0.__horizontal)
-		for l in xrange(len(newp.__sizes)-1):
-			rows, cols = newp.__W[l].shape
-			for r in xrange(rows):
-				for c in xrange(cols):
-					newp.__W[l][(r,c)] = random.choice([p0.__W[l][(r,c)], p1.__W[l][(r,c)]])
-		return newp
-
-	@classmethod
-	def load(cls, file_path):
-		p = None
-		with open(file_path, "r") as f:
-			sizes = [int(n) for n in f.readline().split()]
-			p = cls(sizes, random=False)
-			mat_text = f.read()
-			# parse numpy output back into matrices
-			mat_text = re.sub(r"\[\[", "", mat_text)
-			mat_text = re.sub(r"\]\s+\[", ";\n", mat_text)
-			matstrings = mat_text.split("]]")
-			p.__W = [np.matrix(s) for s in matstrings]
-		return p
-
-	def save(self, directory, suffix=""):
-		fname = "perceptron_" + ("_".join([str(l) for l in self.__sizes])) + suffix + ".dat"
-		path = os.path.join(directory, fname)
-		with open(path, "w") as f:
-			f.write(" ".join([str(l) for l in self.__sizes]) + "\n")
-			f.write(str(self))
-		return path
 
 def action_is_valid(act):
 	if len(act) > 1 and ("invalid" in rg.loc_types(act[1]) or "obstacle" in rg.loc_types(act[1])):
@@ -172,92 +24,259 @@ def locs_around_55(loc):
 			typ = rg.loc_types((x,y))
 			if "invalid" not in typ and "obstacle" not in typ:
 				yield (x,y)
+
 def get_enemies_around(bot, game):
+	ens = []
 	for pos in locs_around_55(bot.location):
 		if pos in game.robots and game.robots[pos].player_id != bot.player_id:
-			yield game.robots[pos]
+			ens.append(game.robots[pos])
+	return ens
+
+@np.vectorize
+def sigmoid(x):
+	return 1.0 / (1.0 + exp(-x))
+
+@np.vectorize
+def sigmoid_derivy(y):
+	return y * (1.0 - y)
+
+@np.vectorize
+def sigmoid_deriv(x):
+	return np.multiply(sigmoid(x), 1.0 - sigmoid(x))
+
+class Perceptron(object):
+
+	def __init__(self, layer_sizes=[], mats=None, random=0.0):
+		self.__W = mats or []
+		self.__layers = len(layer_sizes)
+		self.__layer_sizes = layer_sizes
+		self.__reset_activations()
+		if not mats:
+			for i in xrange(self.__layers - 1):
+				fromsize = layer_sizes[i]
+				tosize = layer_sizes[i+1]
+				mat = np.matrix(np.zeros((tosize, fromsize)))
+				self.__W.append(mat)
+		self.mutate(edit=random)
+
+	def __str__(self):
+		return "\n".join([str(mat) for mat in self.__W])
+
+	def __reset_activations(self):
+		# activations
+		self.__a = map(lambda s: np.zeros((s,1)), self.__layer_sizes)
+		# sum stage (a = sigmoid(z))
+		self.__z  = map(lambda s: np.zeros((s,1)), self.__layer_sizes)
+
+	def copy(self):
+		# using __class__ allows subclasses to be copied also
+		c = self.__class__(self.__layer_sizes)
+		for i in range(self.__layers - 1):
+			c.__W[i] = self.__W[i].copy()
+		return c
+
+	def mutate(self, edit=0.001):
+		for mat in self.__W:
+			changes = np.matrix([edit*rand_plus_or_minus() for _ in xrange(mat.size)])
+			changes = changes.reshape(mat.shape)
+			mat += changes
+		return self
+
+	def set_input(self, which, value):
+		self.__a[0][which] = value
+
+	def set_inputs(self, input_vector):
+		self.__a[0] = input_vector
+
+	def propagate(self):
+		for l in xrange(self.__layers-1):
+			self.__z[l+1] = self.__W[l] * self.__a[l]
+			self.__a[l+1] = sigmoid(self.__z[l+1])
+
+	def backpropagate(self, target, learning_rate=.2):
+		"""Live update of matrix weights.
+			'target' close to 1.0 reinforce (and 0.0 alter) behavior
+		"""
+		#########
+		# step 1: compute errors at each layer
+		#########
+		errors = [None] * self.__layers
+		L = self.__layers - 1 # L is highest layer index
+		# error in last layer is defined by targets
+		errors[L] = np.multiply(self.__a[L] - target, sigmoid_derivy(self.__a[L]))
+		# propagate error backwards through the network
+		for l in range(L-1, 0, -1):
+			errors[l] = np.multiply(self.__W[l].transpose() * errors[l+1], sigmoid_derivy(self.__a[l]))
+		#########
+		# step 2: update matrix weights based on errors
+		#########
+		for l in range(L):
+			self.__W[l] -= learning_rate * (errors[l+1] * self.__a[l].transpose())
+
+	def get_output(self, which):
+		return self.__a[-1][which]
+
+	def choose_output(self, strict=False):
+		if strict:
+			maxi = 0
+			maxv = self.__a[-1][0]
+			for i in xrange(1, self.__layer_sizes[-1]):
+				if self.__a[-1][i] > maxv:
+					maxv = self.__a[-1].item(i)
+					maxi = i
+			return maxi, maxv
+		else:
+			summed = self.__a[-1].cumsum()
+			index = random.random() * summed.item(-1)
+			for i in xrange(0, self.__layer_sizes[-1]):
+				if index <= summed.item(i):
+					return i, self.__a[-1].item(i)
+			return i, self.__a[-1].item(i)
+
+	def get_output_vector(self):
+		return self.__a[-1]
+
+	@classmethod
+	def mate(cls, p0, p1):
+		assert p0.__layer_sizes == p1.__layer_sizes
+		newp = cls(layer_sizes=p0.__layer_sizes)
+		for l in xrange(newp.__layers - 1):
+			# select each weight randomly from either parent
+			rows, cols = newp.__W[l].shape
+			for r in xrange(rows):
+				for c in xrange(cols):
+					newp.__W[l][(r,c)] = random.choice([p0.__W[l][(r,c)], p1.__W[l][(r,c)]])
+		return newp
+
+	@classmethod
+	def load(cls, file_path):
+		p = None
+		with open(file_path, "r") as f:
+			npzdata = np.load(f)
+			sizes = npzdata['arr_0']
+			p = cls(sizes, random=False)
+			for l in xrange(p.__layers - 1):
+				p.__W[l] = np.matrix(npzdata['arr_%d' % (l+1)])
+		return p
+
+	def save(self, directory, suffix=""):
+		fname = "perceptron_" + ("_".join([str(l) for l in self.__layer_sizes])) + suffix + ".npz"
+		path = os.path.join(directory, fname)
+		with open(path, "w") as f:
+			mats_to_save = [np.array(self.__layer_sizes)] + self.__W
+			np.savez(f, *mats_to_save)
+		return path
+
+class ScoredPerceptron(Perceptron):
+
+	def __init__(self, *args, **kwargs):
+		super(ScoredPerceptron, self).__init__(*args, **kwargs)
+		self._score = 0
+
+	def reset_score(self):
+		self._score = 0
+
+	def add_score(self, delta):
+		self._score += delta
+
+	def get_score(self):
+		return self._score
+
+	def mutate(self, edit=0.001):
+		super(ScoredPerceptron, self).mutate(edit)
+		self.reset_score()
+		return self
 
 class RobotPopulation(object):
-
-	width = 5
-	halfwidth = width / 2
-	inputs = (width ** 2) * 4 # 4 = {ally hp, enemy hp, spawn, obstacle}
-	outputs = 9 # 4 attack, 4 move, guard, suicide (suicide removed temporarily)
-	layers = [width**2]
-	selfishness = 1.0
 
 	def __init__(self, pop):
 		self.population = pop
 
 	def population_init(self):
-		if not hasattr(self, 'bot_states'):
-			# map from robot id to state, where state has 'brain', 'bot', 'last_hp', 'enemies', 'last_output', and 'last_choice'
-			self.bot_states = {}
+		if not hasattr(self, 'last_update'):
 			self.last_update = -1
+			# map from robot id to state from previous frame
+			self.tracking_bots = {}
 
 	def population_update(self, game):
 		if self.last_update < game.turn:
 			self.last_update = game.turn
-			bots_by_id = {bot.robot_id: bot for bot in game.robots.values() if bot.player_id == self.player_id}
-			if (game.turn + 1) % 100 == 0:
-				self.population.save_best("brains55", extra="_pop%d_turn%5d" % (self.player_id, game.turn+1))
-				self.population.next_generation()
-			else:
-				enemies = [bot for bot in game.robots.values() if bot.player_id != self.player_id]
-				team_score = (len(bots_by_id) - len(enemies)) / rg.settings.spawn_per_player
-				# learn from last frame
-				delete_list = []
-				for r_id, state in self.bot_states.iteritems():
-					brain = state["brain"]
-					prev_output = state["last_output"]
-					prev_choice = state["last_choice"]
-					bot = state["bot"]
-					enemies = state["enemies"]
-					# output is None if the robot was just spawned
-					if prev_output is not None:
-						# here we calculate the effectiveness of the previous decision,
-						# then run the learning algorithm to enforce or punish that behaviour
-						prev_enemy_hp = sum(b.hp for b in enemies)
-						state["enemies"] = get_enemies_around(bot, game)
-						enemies = state["enemies"]
-						curr_enemy_hp = sum(b.hp for b in enemies)
-						# this should enforce fleeing or attacking. positive score when enemies lose health
-						selfish_score = float(prev_enemy_hp - curr_enemy_hp) / float(rg.settings.attack_range[1])
-						if r_id not in bots_by_id:
-							# if died, detract from selfish score
-							selfish_score -= 1.0
-							delete_list.append(r_id)
-						else:
-							# still alive. selfish score is good if health was retained
-							new_hp  = bots_by_id[r_id]["hp"]
-							selfish_score += (new_hp - state["last_hp"]) / rg.settings.robot_hp
-							state["last_hp"] = new_hp
-						s = RobotPopulation.selfishness
-						decision_score = Perceptron.sigmoid(selfish_score * s + team_score * (1-s))
-						brain.update_score(decision_score)
-						prev_output[prev_choice] += decision_score - 0.5
-						brain.backpropagate(prev_output, learning_rate=0.8)
-				for r_id in delete_list:
-					del self.bot_states[r_id]
+			self.population.on_turn(game.turn)
+			living_bots = [bot.robot_id for bot in game.robots.values() if bot.player_id == self.player_id]
+			# remove dead from tracking
+			delete_list = []
+			for r_id, state in self.tracking_bots.iteritems():
+				if r_id not in living_bots:
+					delete_list.append(r_id)
+			for r_id in delete_list:
+				self.population.remove(state["brain"])
+				del self.tracking_bots[r_id]
 
 			# add new brains
 			for loc, bot in game.robots.iteritems():
-				if bot.player_id == self.player_id and bot.robot_id not in self.bot_states:
-					self.bot_states[bot.robot_id] = {
+				if bot.player_id == self.player_id and bot.robot_id not in self.tracking_bots:
+					self.tracking_bots[bot.robot_id] = {
 						"last_hp" : bot.hp,
 						"brain": self.population.next_brain(),
-						"bot" : bot,
 						"enemies" : [],
 						"last_output": None,
 						"last_choice": None
 					}
 
-	def construct_features(self, game):
+class Robot(RobotPopulation):
+
+	width = 5
+	halfwidth = width / 2
+	inputs = (width ** 2) * 4 # 4 = {ally hp, enemy hp, spawn, obstacle}
+	outputs = 10 # 4 attack, 4 move, guard, suicide
+	layers = [width**2]
+	selfishness = 0.5
+
+	def act(self, game):
+		# population_init has an effect once at the beginning of the match
+		self.population_init()
+		
+		# add next generation and remove dead (once per turn)
+		self.population_update(game)
+		
+		# for this specific robot, learn from previous iteration
+		self.hindsight(game)
+		
+		senses = self.sense_environment(game)
+
+		state = self.tracking_bots[self.robot_id]
+		brain = state["brain"]
+
+		# to encourage longevity, brain's scores are the sum of their health over time
+		# (scores are used in selecting parents of the next generation)
+		brain.add_score(self.hp)
+
+		brain.set_inputs(senses)
+		brain.propagate()
+
+		index, value = brain.choose_output(strict=False)
+		state["last_output"] = brain.get_output_vector()
+		state["last_choice"] = index
+		state["enemies"]     = get_enemies_around(self, game)
+
+		x,y = self.location
+		choices = [
+			['move', (x-1, y)],   ['move', (x+1, y)],   ['move', (x, y-1)],   ['move', (x, y+1)],
+			['attack', (x-1, y)], ['attack', (x+1, y)], ['attack', (x, y-1)], ['attack', (x, y+1)],
+			['guard'], ['suicide']]
+		blind_choice = choices[index]
+		if not action_is_valid(blind_choice):
+			# negative here is a flag indicating that the last choice was invalid
+			state["last_choice"] = -1 - state["last_choice"]
+			return ['guard']
+		return blind_choice
+
+	def sense_environment(self, game):
 		xc, yc = self.location
-		features = np.zeros((RobotPopulation.inputs,1))
+		features = np.zeros((Robot.inputs,1))
 		i = 0
-		for x in xrange(xc - RobotPopulation.halfwidth, xc + RobotPopulation.halfwidth + 1):
-			for y in xrange(yc - RobotPopulation.halfwidth, yc + RobotPopulation.halfwidth + 1):
+		for x in xrange(xc - Robot.halfwidth, xc + Robot.halfwidth + 1):
+			for y in xrange(yc - Robot.halfwidth, yc + Robot.halfwidth + 1):
 				bot = game.robots.get((x,y))
 				if bot == None:
 					features[(i, 0)] = 0.0
@@ -270,84 +289,89 @@ class RobotPopulation(object):
 				i += 4
 		return features
 
-class Robot(RobotPopulation):
+	def hindsight(self, game):
+		"""
+		reinforce good habits, unlearn bad habits
+		"""
+		bot_state = self.tracking_bots[self.robot_id]
+		enemies     = bot_state["enemies"]
 
-	def act(self, game):
-		self.population_init()
-		self.population_update(game)
-		
-		x,y = self.location
+		brain       = bot_state["brain"]
+		last_output = bot_state["last_output"]
+		last_choice = bot_state["last_choice"]
 
-		features = self.construct_features(game)
+		if last_output is not None:
+			ideal_output = last_output.copy()
 
-		state = self.bot_states[self.robot_id]
-		brain = state["brain"]
-
-		brain.set_inputs(features)
-		brain.propagate()
-
-		index, value = brain.choose_output(strict=False)
-		self.bot_states[self.robot_id]["last_output"] = brain.get_output_vector()
-		self.bot_states[self.robot_id]["last_choice"] = index
-
-		choices = [
-			['move', (x-1, y)],   ['move', (x+1, y)],   ['move', (x, y-1)],   ['move', (x, y+1)],
-			['attack', (x-1, y)], ['attack', (x+1, y)], ['attack', (x, y-1)], ['attack', (x, y+1)],
-			['guard']]
-		blind_choice = choices[index]
-		if not action_is_valid(blind_choice): return ['guard']
-		return blind_choice
-
-class ScoredPerceptron(Perceptron):
-
-	def __init__(self, *args, **kwargs):
-		super(ScoredPerceptron, self).__init__(*args, **kwargs)
-		self._score = 0
-
-	def reset_score(self):
-		self._score = 0
-
-	def update_score(self, delta):
-		self._score += delta
-
-	def get_score(self):
-		return self._score
-
-	def mutate(self, edit=0.001):
-		super(ScoredPerceptron, self).mutate(edit)
-		self.reset_score()
-		return self
+			if last_choice < 0:
+				# previous choice was simply invalid
+				last_choice = -1 * (last_choice + 1)
+				# ideal output in that case should have been zero if it was invalid, regardless of score
+				ideal_output[last_choice] = 0.0
+			else:
+				# get team score
+				global_allies  = [bot for bot in game.robots.values() if bot.player_id == self.player_id]
+				global_enemies = [bot for bot in game.robots.values() if bot.player_id != self.player_id]
+				team_score = float(len(global_allies) - len(global_enemies)) / rg.settings.spawn_per_player
+				# get personal score
+				personal_score = 0.0
+				new_enemies = get_enemies_around(self, game)
+				if len(enemies) > 0 and len(new_enemies) > 0:
+					enemy_hp     = float(sum((en["hp"] for en in enemies)))     / len(enemies)
+					new_enemy_hp = float(sum((en["hp"] for en in new_enemies))) / len(enemies)
+					damage_dealt = abs(new_enemy_hp - enemy_hp)
+					damage_felt  = abs(self.hp - bot_state["last_hp"])
+					personal_score = float(damage_dealt - damage_felt) / rg.settings.attack_range[1]
+				# update ideal output based on whether score was good or bad
+				s = Robot.selfishness
+				ideal_output[last_choice] += sigmoid(personal_score * s + team_score * (1-s)) - 0.5
+			brain.backpropagate(ideal_output, learning_rate=0.5)
 
 class Population(object):
 
-	def __init__(self, size, new_random, **bka):
+	def __init__(self, init_size, p_new_random=0.05, seed_pop=[], save_dir="", gen_length=0, **bka):
 		self.__bka = bka
-		self.__size = size
-		self.__new_random = new_random
+		# make sure randomness is part of blank brain construction
+		self.__bka["random"] = self.__bka.get("random", 0.1)
+		self.__size = init_size
+		self.__p_new_random = p_new_random
+		self.__save_dir = save_dir
+		self.__gen_length = gen_length
+		self._all_time_best = None
+		self.brains = (seed_pop + [self.blank_slate() for _ in xrange(init_size)])[0:init_size]
 		self.generation = 0
 
-	def make_brain(self):
+	def blank_slate(self):
 		return ScoredPerceptron(**self.__bka)
 
 	def save_best(self, dest, extra=""):
-		best_brain = max(self.brains, key=lambda b: b.get_score())
-		best_brain.save(dest, "%s_generation%d" % (extra, self.generation))
+		best_brain = self.choose_brain(strict=True)
+		best_brain.save(dest, extra)
 
 	def next_generation(self):
 		self.generation += 1
-		self.brains = [self.next_brain() for _ in xrange(self.__size - self.__new_random)]
-		self.brains.extend([self.make_brain() for _ in xrange(self.__new_random)])
+		self.brains = [None] * self.__size
+		for b in xrange(self.__size):
+			if random.random() < self.__p_new_random:
+				self.brains[b] = self.blank_slate()
+			else:
+				self.brains[b] = self.next_brain()
 
 	def get_generation(self):
 		return self.generation
 
-	def remove_brain(self, brain):
+	def remove(self, brain):
 		if brain in self.brains:
+			if self._all_time_best is None or brain.get_score() > self._all_time_best.get_score():
+				self._all_time_best = brain
 			self.brains.remove(brain)
 		else:
-			print "could not find brain for removal"
+			pass
+			#print "could not find brain for removal"
 
-	def choose_brain(self, strict=False):
+	def choose_brain(self, strict=False, all_time=False):
+		if len(self.brains) == 0 or all_time:
+			return self._all_time_best
 		if strict:
 			return max(self.brains, key=lambda brain: brain.get_score())
 		else:
@@ -362,12 +386,17 @@ class Population(object):
 				if s >= idx:
 					return self.brains[i]
 
+	def on_turn(self, turn):
+		if (turn + 1) % 500 == 0 and self.__save_dir != "":
+			self.save_best(self.__save_dir, "_turn%d_gen%d" % (turn, self.generation))
+		if self.__gen_length > 0 and (turn+1) % self.__gen_length == 0:
+			self.next_generation()
+
 class Individuals(Population):
 	"""Mutate each brain in isolation
 	"""
-	def __init__(self, size, new_random, mutation_rate, seed_pop=[], **brain_kwargs):
-		super(Individuals, self).__init__(size, new_random, **brain_kwargs)
-		self.brains = (seed_pop + [self.make_brain() for _ in xrange(size)])[0:size]
+	def __init__(self, size, p_new_random, mutation_rate, seed_pop=[], save_dir="", gen_length=0, **brain_kwargs):
+		super(Individuals, self).__init__(size, p_new_random, seed_pop, save_dir, gen_length, **brain_kwargs)
 		self._mutate = mutation_rate
 
 	def next_brain(self):
@@ -378,9 +407,8 @@ class Individuals(Population):
 class Family(Population):
 	"""Cross together fittest from population
 	"""
-	def __init__(self, size, new_random, mutation_rate, seed_pop=[], **brain_kwargs):
-		super(Family, self).__init__(size, new_random, **brain_kwargs)
-		self.brains = (seed_pop + [self.make_brain() for _ in xrange(size)])[0:size]
+	def __init__(self, size, p_new_random, mutation_rate, seed_pop=[], save_dir="", gen_length=0, **brain_kwargs):
+		super(Family, self).__init__(size, p_new_random, seed_pop, save_dir, gen_length, **brain_kwargs)
 		self._mutate = mutation_rate
 
 	def next_brain(self):
@@ -388,12 +416,33 @@ class Family(Population):
 		self.brains.append(next)
 		return next
 
-class Tournament(object):
-	def __init__(self, population_class, team_size, new_random, mutation_rate, **brain_kwargs):
-		self.red_team = population_class(team_size, new_random, mutation_rate, **brain_kwargs)
-		self.blu_team = population_class(team_size, new_random, mutation_rate, **brain_kwargs)
+class Collective(Population):
+	"""All bots share the same few brains
+		(population never grows larger than the initial size)
+	"""
+	def __init__(self, size, p_new_random, mutation_rate, seed_pop=[], save_dir="", gen_length=0, **brain_kwargs):
+		super(Collective, self).__init__(size, p_new_random, seed_pop, save_dir, gen_length, **brain_kwargs)
+		self._mutate = mutation_rate
 
-	def get_matches(self):
+	def next_brain(self):
+		return self.choose_brain(strict=False)
+
+	def remove(self, brain):
+		"""override Population.remove(), since brains here are shared
+		"""
+		if self._all_time_best is None or brain.get_score() > self._all_time_best.get_score():
+			self._all_time_best = brain
+
+class Tournament(object):
+	def __init__(self, pop0, pop1, game_seed, n_games, turns_per_game):
+		self.red_team = pop0
+		self.blu_team = pop1
+
+		self.__game_options  = Options(game_seed=game_seed, n_of_games=n_games, print_info=True)
+		self.__game_settings = game_settings
+		self.__game_settings['max_turns'] = turns_per_game
+
+	def get_1v1_matches(self):
 		for r in self.red_team.brains:
 			for b in self.blu_team.brains:
 				yield (r, b)
@@ -402,100 +451,42 @@ class Tournament(object):
 		self.red_team.next_generation()
 		self.blu_team.next_generation()
 
-	def save_best(self, dest, extra=""):
-		self.red_team.save_best(dest, "_red"+extra)
-		self.blu_team.save_best(dest, "_blu"+extra)
+	def run(self):
+		red_robot  = Robot(self.red_team)
+		red_player = Player(robot=red_robot, name="Red")
+		blu_robot  = Robot(self.blu_team)
+		blu_player = Player(robot=blu_robot, name="Blu")
+		r = Runner(players=[red_player, blu_player], options=self.__game_options, settings=self.__game_settings)
+		r.run()
 
-# tournament
-if __name__ == '__main__':
-	from rgkit.run import Options, Runner
-	from rgkit.game import Player
-	from rgkit.settings import settings as game_settings
-	from optparse import OptionParser
-
-	parser = OptionParser()
-	parser.add_option("-s", "--seed",          type="int",   dest="seed",         default=0,    help="set seed for games' RNG")
-	parser.add_option("-g", "--generations",   type="int",   dest="generations",  default=500,  help="number of generations")
-	parser.add_option("-n", "--ngames",        type="int",   dest="ngames",       default=1,    help="number of games per generation")
-	parser.add_option("-p", "--population",    type="int",   dest="population",   default=8,    help="population size")
-	parser.add_option("-r", "--random",        type="int",   dest="random",       default=1,    help="number of random brains to add each generation")
-	parser.add_option("-e", "--save-every",    type="int",   dest="save_every",   default=100,  help="generations between saves")
-	parser.add_option("-T", "--turns",         type="int",   dest="turns",        default=100,  help="turns per game")
-	parser.add_option("-m", "--mutation-rate", type="float", dest="mutationrate", default=0.01, help="mutation rate")
-	parser.add_option("-o", "--output-dir",    type="string",dest="savedir",      default="brains", help="directory to save brains")
-	parser.add_option("-t", "--pop-type",      type="string",dest="pop_type",     default="Family", help="population type (Individual, Family, Team)")
-	parser.add_option("-l", "--load-file",     type="string",dest="load_file",     help="path to a file containing paths to brains on each line. This is an alternative to naming each file in the args")
-	(options, leftover_args) = parser.parse_args()
-
-	pop_size = options.population
-	new_random = options.random
-	ngames = options.ngames
-	mutation_rate = options.mutationrate
-	max_generation = options.generations
-	rand_seed = options.seed
-	save_dir = options.savedir
-	save_every = options.save_every
-	game_settings["max_turns"] = options.turns
-
-	random.seed(rand_seed)
-
-	load_brains = []
-	for arg in leftover_args:
-		try:
-			p = ScoredPerceptron.load(arg)
-			if p is not None:
-				load_brains.append(p)
-		except:
-			print "could not load brain from file '%s'" % (arg)
-
-	if options.load_file:
-		with open(options.load_file, 'r') as f:
-			fnames = f.readlines()
-		for f in fnames:
-			try:
-				p = ScoredPerceptron.load(f)
-				if p is not None:
-					load_brains.append(p)
-			except:
-				print "could not load brain from file '%s'" % (f)
-
-	brain_construction = {
-		"layer_sizes" : [RobotPopulation.inputs] + RobotPopulation.layers + [RobotPopulation.outputs],
-		"random" : True
+def create_population(typ, size, rand, mut, seedfile, saveto, gen_length, slate_random):
+	seed = []
+	if seedfile:
+		with open(seedfile, "r") as f:
+			brainfiles = [ln.strip() for ln in f.readlines()]
+			seed = [ScoredPerceptron.load(b) for b in brainfiles]
+	args = [size, rand, mut, seed, saveto, gen_length]
+	brain_kwargs = {
+		"layer_sizes" : [Robot.inputs] + Robot.layers + [Robot.outputs],
+		"random" : slate_random
 	}
-	if options.pop_type:
-		if options.pop_type.lower() == "individuals":
-			population = Individuals
-		elif options.pop_type.lower() == "family":
-			population = Family
-		else:
-			print "unkown population type '%s'" % options.pop_type
+	if typ.lower() == "individuals":
+		return Individuals(*args, **brain_kwargs)
+	elif typ.lower() == "family":
+		return Family(*args, **brain_kwargs)
+	elif typ.lower() == "collective":
+		return Collective(*args, **brain_kwargs)
+	else:
+		print "unknown population type: %s" % typ
 
-	tournament = Tournament(population, pop_size, new_random, mutation_rate, **brain_construction)
+if __name__ == '__main__':
+	from evo_options import *
 
-	def run_match(pop0, pop1):
-		r0 = Robot(pop0)
-		p0 = Player(robot=r0)
-		r1 = Robot(pop1)
-		p1 = Player(robot=r1)
+	if game_seed:
+		random.seed(game_seed)
 
-		opts = Options(n_of_games=ngames, game_seed=pop0.get_generation() + rand_seed, print_info=True)
-		r = Runner(players=[p0, p1], options=opts, settings=game_settings)
-		results = r.run()
-		swing = 0
-		for res in results:
-			swing += res[0] - res[1]
-		return swing
+	red = create_population(pop0, pop0_size, pop0_random, pop0_mutation, pop0_seed, pop0_saveto, pop0_gen_length, pop0_slate_rand)
+	blu = create_population(pop1, pop1_size, pop1_random, pop1_mutation, pop1_seed, pop1_saveto, pop1_gen_length, pop1_slate_rand)
 
-	g = 0
-	while g < max_generation:
-		g += 1
-		print "--- generation %d ---" % g
-
-		# run 1v1 matches
-		run_match(tournament.red_team, tournament.blu_team)
-
-		if save_every != 0 and g % save_every == 0:
-			tournament.save_best(options.savedir)
-
-		tournament.next_generation()
+	tournament = Tournament(red, blu, game_seed, num_games, turns_per)
+	tournament.run()
