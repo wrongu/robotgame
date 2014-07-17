@@ -9,6 +9,31 @@ from rgkit.run import Options, Runner
 from rgkit.game import Player
 from rgkit.settings import settings as game_settings
 
+def feature_display(feature_vector):
+	from termcolor import cprint
+	for x in range(5):
+		for y in range(5):
+			block_index = 4 * (5 * x + y)
+			bgcolor = "on_white"
+			txcolor  = "blue"
+			ally_hp  = feature_vector[block_index + 0]
+			enemy_hp = feature_vector[block_index + 1]
+			spawn    = feature_vector[block_index + 2]
+			obstacle = feature_vector[block_index + 3]
+			content = "  "
+			if ally_hp > 0:
+				txcolor = "green"
+				content = "%2d" % (ally_hp * rg.settings.robot_hp)
+			elif enemy_hp > 0:
+				txcolor = "red"
+				content = "%2d" % (enemy_hp * rg.settings.robot_hp)
+			if spawn > 0:
+				bgcolor = "on_grey"
+			if obstacle > 0:
+				content = "##"
+			cprint(" "+content+" ", txcolor, bgcolor, end="")
+		print ""
+
 def rand_plus_or_minus():
 	return (random.random() * 2.0) - 1.0
 
@@ -88,6 +113,9 @@ class Perceptron(object):
 	def set_inputs(self, input_vector):
 		self.__a[0] = input_vector
 
+	def get_inputs(self):
+		return self.__a[0].copy()
+
 	def propagate(self):
 		for l in xrange(self.__layers-1):
 			self.__z[l+1] = self.__W[l] * self.__a[l]
@@ -134,7 +162,7 @@ class Perceptron(object):
 			return i, self.__a[-1].item(i)
 
 	def get_output_vector(self):
-		return self.__a[-1]
+		return self.__a[-1].copy()
 
 	@classmethod
 	def mate(cls, p0, p1):
@@ -209,6 +237,16 @@ class RobotPopulation(object):
 				if r_id not in living_bots:
 					delete_list.append(r_id)
 			for r_id in delete_list:
+				# debugging
+				state = self.tracking_bots[r_id]
+				# print "bot died"
+				# feature_display(state["last_senses"])
+				# print "having chosen", state["last_choice"]
+				# print "from", state["last_output"]
+				# raw_input()
+				target_output = state["last_output"]
+				target_output[state["last_choice"]] = 0.0
+				self.population.group_lesson(state["last_senses"], target_output)
 				self.population.remove(state["brain"])
 				del self.tracking_bots[r_id]
 
@@ -219,6 +257,7 @@ class RobotPopulation(object):
 						"last_hp" : bot.hp,
 						"brain": self.population.next_brain(),
 						"enemies" : [],
+						"last_senses": None,
 						"last_output": None,
 						"last_choice": None
 					}
@@ -230,7 +269,7 @@ class Robot(RobotPopulation):
 	inputs = (width ** 2) * 4 # 4 = {ally hp, enemy hp, spawn, obstacle}
 	outputs = 10 # 4 attack, 4 move, guard, suicide
 	layers = [width**2]
-	selfishness = 0.5
+	selfishness = 1.0
 
 	def act(self, game):
 		# population_init has an effect once at the beginning of the match
@@ -254,7 +293,8 @@ class Robot(RobotPopulation):
 		brain.set_inputs(senses)
 		brain.propagate()
 
-		index, value = brain.choose_output(strict=False)
+		index, value = brain.choose_output(strict=True)
+		state["last_senses"] = senses
 		state["last_output"] = brain.get_output_vector()
 		state["last_choice"] = index
 		state["enemies"]     = get_enemies_around(self, game)
@@ -297,6 +337,7 @@ class Robot(RobotPopulation):
 		enemies     = bot_state["enemies"]
 
 		brain       = bot_state["brain"]
+		last_senses = bot_state["last_senses"]
 		last_output = bot_state["last_output"]
 		last_choice = bot_state["last_choice"]
 
@@ -318,14 +359,27 @@ class Robot(RobotPopulation):
 				new_enemies = get_enemies_around(self, game)
 				if len(enemies) > 0 and len(new_enemies) > 0:
 					enemy_hp     = float(sum((en["hp"] for en in enemies)))     / len(enemies)
-					new_enemy_hp = float(sum((en["hp"] for en in new_enemies))) / len(enemies)
-					damage_dealt = abs(new_enemy_hp - enemy_hp)
-					damage_felt  = abs(self.hp - bot_state["last_hp"])
+					new_enemy_hp = float(sum((en["hp"] for en in new_enemies))) / len(new_enemies)
+					damage_dealt = enemy_hp - new_enemy_hp
+					damage_felt  = bot_state["last_hp"] - self.hp
 					personal_score = float(damage_dealt - damage_felt) / rg.settings.attack_range[1]
 				# update ideal output based on whether score was good or bad
 				s = Robot.selfishness
 				ideal_output[last_choice] += sigmoid(personal_score * s + team_score * (1-s)) - 0.5
-			brain.backpropagate(ideal_output, learning_rate=0.5)
+				ideal_output[last_choice] = max(min(ideal_output[last_choice], 1.0), 0.0)
+				# debugging
+				# if personal_score != 0:
+				# 	print self.location
+				# 	feature_display(last_senses)
+				# 	print "with outputs (choice %d)" % last_choice, last_output
+				# 	print "and result"
+				# 	feature_display(self.sense_environment(game))
+				# 	print "--> personal score of %f" % personal_score
+				# 	print "--> ideal outputs of", ideal_output
+				# 	raw_input()
+			brain.set_inputs(last_senses)
+			brain.propagate()
+			brain.backpropagate(ideal_output, learning_rate=0.1)
 
 class Population(object):
 
@@ -340,6 +394,12 @@ class Population(object):
 		self._all_time_best = None
 		self.brains = (seed_pop + [self.blank_slate() for _ in xrange(init_size)])[0:init_size]
 		self.generation = 0
+
+	def group_lesson(self, inputs, outputs, rate=0.5):
+		for brain in self.brains:
+			brain.set_inputs(inputs)
+			brain.propagate()
+			brain.backpropagate(outputs, learning_rate=rate)
 
 	def blank_slate(self):
 		return ScoredPerceptron(**self.__bka)
@@ -428,10 +488,12 @@ class Collective(Population):
 		return self.choose_brain(strict=False)
 
 	def remove(self, brain):
-		"""override Population.remove(), since brains here are shared
+		"""override Population.remove since this population has an unchanging selection of brains
 		"""
-		if self._all_time_best is None or brain.get_score() > self._all_time_best.get_score():
-			self._all_time_best = brain
+		if brain in self.brains:
+			if self._all_time_best is None or brain.get_score() > self._all_time_best.get_score():
+				self._all_time_best = brain
+
 
 class Tournament(object):
 	def __init__(self, pop0, pop1, game_seed, n_games, turns_per_game):
