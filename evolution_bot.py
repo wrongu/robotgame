@@ -298,6 +298,7 @@ class Robot(RobotPopulation):
 		state["last_output"] = brain.get_output_vector()
 		state["last_choice"] = index
 		state["enemies"]     = get_enemies_around(self, game)
+		state["last_hp"]     = self.hp
 
 		x,y = self.location
 		choices = [
@@ -343,12 +344,15 @@ class Robot(RobotPopulation):
 
 		if last_output is not None:
 			ideal_output = last_output.copy()
+			learn = False
 
 			if last_choice < 0:
 				# previous choice was simply invalid
 				last_choice = -1 * (last_choice + 1)
 				# ideal output in that case should have been zero if it was invalid, regardless of score
+				print self.location,"did invalid"
 				ideal_output[last_choice] = 0.0
+				learn = True
 			else:
 				# get team score
 				global_allies  = [bot for bot in game.robots.values() if bot.player_id == self.player_id]
@@ -365,8 +369,11 @@ class Robot(RobotPopulation):
 					personal_score = float(damage_dealt - damage_felt) / rg.settings.attack_range[1]
 				# update ideal output based on whether score was good or bad
 				s = Robot.selfishness
-				ideal_output[last_choice] += sigmoid(personal_score * s + team_score * (1-s)) - 0.5
+				net_score = personal_score * s + team_score * (1-s)
+				ideal_output[last_choice] += sigmoid(net_score) - 0.5
 				ideal_output[last_choice] = max(min(ideal_output[last_choice], 1.0), 0.0)
+				learn = (net_score != 0)
+				print self.location, "did", ("good" if net_score > 0 else ("bad" if net_score < 0 else "neutral"))
 				# debugging
 				# if personal_score != 0:
 				# 	print self.location
@@ -377,9 +384,10 @@ class Robot(RobotPopulation):
 				# 	print "--> personal score of %f" % personal_score
 				# 	print "--> ideal outputs of", ideal_output
 				# 	raw_input()
-			brain.set_inputs(last_senses)
-			brain.propagate()
-			brain.backpropagate(ideal_output, learning_rate=0.1)
+			if learn:
+				brain.set_inputs(last_senses)
+				brain.propagate()
+				brain.backpropagate(ideal_output, learning_rate=0.1)
 
 class Population(object):
 
@@ -496,13 +504,11 @@ class Collective(Population):
 
 
 class Tournament(object):
-	def __init__(self, pop0, pop1, game_seed, n_games, turns_per_game):
+	def __init__(self, pop0, pop1, game_seed, n_games, mapfile=None):
 		self.red_team = pop0
 		self.blu_team = pop1
 
-		self.__game_options  = Options(game_seed=game_seed, n_of_games=n_games, print_info=True)
-		self.__game_settings = game_settings
-		self.__game_settings['max_turns'] = turns_per_game
+		self.__game_options  = Options(game_seed=game_seed, n_of_games=n_games, map_filepath=mapfile, print_info=True)
 
 	def get_1v1_matches(self):
 		for r in self.red_team.brains:
@@ -518,7 +524,7 @@ class Tournament(object):
 		red_player = Player(robot=red_robot, name="Red")
 		blu_robot  = Robot(self.blu_team)
 		blu_player = Player(robot=blu_robot, name="Blu")
-		r = Runner(players=[red_player, blu_player], options=self.__game_options, settings=self.__game_settings)
+		r = Runner(players=[red_player, blu_player], options=self.__game_options)
 		r.run()
 
 def create_population(typ, size, rand, mut, seedfile, saveto, gen_length, slate_random):
@@ -550,5 +556,5 @@ if __name__ == '__main__':
 	red = create_population(pop0, pop0_size, pop0_random, pop0_mutation, pop0_seed, pop0_saveto, pop0_gen_length, pop0_slate_rand)
 	blu = create_population(pop1, pop1_size, pop1_random, pop1_mutation, pop1_seed, pop1_saveto, pop1_gen_length, pop1_slate_rand)
 
-	tournament = Tournament(red, blu, game_seed, num_games, turns_per)
+	tournament = Tournament(red, blu, game_seed, num_games, mapfile="rgkit/maps/minimap.py")
 	tournament.run()
