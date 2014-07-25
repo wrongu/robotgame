@@ -36,15 +36,17 @@ class ObservationBot(object):
 		self._teacher = teacher
 		self._student = student
 		self._rate    = rate
+		self.samples = []
 
 	def init_tracking(self, game):
 		if not hasattr(self, 'last_update'):
 			self.last_update = -1
 		if self.last_update < game.turn:
-			if game.turn > 1:
-				print "%f,%f" % (self.average_error,self.percent_correct)
-			else:
-				print "average error,percent correct"
+			# if game.turn > 1:
+			# 	print "%f,%f" % (self.average_error,self.percent_correct)
+			# else:
+			# 	print "average error,percent correct"
+			print game.turn
 			self.last_update = game.turn
 			self.n_observations = 0
 			self.average_error = 0.0
@@ -86,10 +88,11 @@ class ObservationBot(object):
 				ideal_output = np.zeros((len(brain_choices), 1))
 				ideal_output[brain_index] = 1.0
 				senses = self._student.sense_environment(game)
-				student_brain.set_inputs(senses)
-				student_brain.propagate()
-				err = student_brain.backpropagate(ideal_output, learning_rate=self._rate)
-				self.average_error += (err - self.average_error) / self.n_observations
+				self.samples.append((senses, ideal_output))
+				# student_brain.set_input_vector(senses)
+				# student_brain.propagate()
+				# err = student_brain.backpropagate(ideal_output, learning_rate=self._rate)
+				# self.average_error += (err - self.average_error) / self.n_observations
 				# debug
 				# feature_display(senses)
 				# print sorted(zip(student_brain.get_output_vector(), brain_choices), reverse=True)
@@ -100,29 +103,51 @@ class ObservationBot(object):
 				print "no brain!"
 		return wise_decision
 
-from rgkit.run import Runner, Options
-from rgkit.game import Player
-from rgkit.settings import settings
-from sys import argv
+if __name__ == '__main__':
+	from rgkit.run import Runner, Options
+	from rgkit.game import Player
+	from rgkit.settings import settings
+	from sys import argv
 
-rt = 0.2
-if len(argv) > 1:
-	rt = float(argv[1])
+	rt = 0.2
+	if len(argv) > 1:
+		rt = float(argv[1])
 
-teacher_class = corners3.Robot
+	teacher_class = corners3.Robot
 
-global_brain = neuralnets.MultiLayerPerceptron([100,25,10], random=0.1)
-def collective(s):
-	return global_brain
-mlp = mlpbot.Robot(False)
-mlp.override_next_brain(collective)
+	student_brain = neuralnets.MultiLayerPerceptron([100,25,10], random=0.1)
+	mlp = mlpbot.Robot(False)
+	mlp.override_next_brain(lambda s: student_brain)
 
-# run the observation match
-settings["max_turns"] = 1000
-red = Player(name="Corners 3", robot=corners3.Robot())
-blue = Player(name="senpai", robot=ObservationBot(teacher_class(), mlp, rate=rt))
-opts = Options()
-r = Runner(players=[red,blue], options=opts)
-r.run()
+	ob = ObservationBot(teacher_class(), mlp, rate=rt)
 
-global_brain.save(".", "incubated_%d_%f" % (settings["max_turns"], rt))
+	# run the observation match
+	settings["max_turns"] = 400
+	red = Player(name="Corners 3", robot=corners3.Robot())
+	blue = Player(name="senpai", robot=ob)
+	opts = Options()
+	r = Runner(players=[red,blue], options=opts)
+	r.run()
+
+	student_brain.save(".", "incubated_%d_%f" % (settings["max_turns"], rt))
+
+	print "~~observation done~~"
+	print "collected %d training examples" % (len(ob.samples))
+
+	deep_brain = neuralnets.MultiLayerPerceptron([100,25,10], random=0.1)
+	deep_brain.deep_learn(ob.samples)
+
+	print "training shallow brain"
+	shallow_brain = neuralnets.MultiLayerPerceptron([100,25,10], random=0.1)
+	shallow_brain.train(ob.samples)
+
+	# match between student_brain and deep_brain
+	mlp_shallow  = mlpbot.Robot(False)
+	mlp_deep     = mlpbot.Robot(False)
+
+	mlp_shallow.override_next_brain(lambda s: shallow_brain)
+	mlp_deep.override_next_brain(lambda s: deep_brain)
+
+	opts.print_info = True
+	r = Runner(players=[Player(name="shallow", robot=mlp_shallow), Player(name="deep", robot=mlp_deep)], options=opts)
+	r.run()

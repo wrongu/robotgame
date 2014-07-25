@@ -141,32 +141,32 @@ class Robot:
         # Decision making process is as follows
         # First, check if I need to flee
         if should_flee():
-            print self.location, "panicking"
+            # print self.location, "panicking"
             decision = flee_or_panic()
         # Second, attack the strongest adjacent enemy (least likely to flee)
         elif len(adj_enemies) > 0:
-            print self.location, "atacking adjacent",
+            # print self.location, "atacking adjacent",
             strongest = adj_enemies[0]
             for en in adj_enemies[1:]:
                 if en.hp > strongest.hp:
                     strongest = en
-            print strongest.location
+            # print strongest.location
             decision = attack(strongest.location)
         # Third, set a trap if I am 2 spaces away from an enemy
         elif should_trap():
-            print self.location, "setting trap to",
+            # print self.location, "setting trap to",
             # choose from the intersection of (spaces around me) and (spaces around enemies)
             choices = [n for n in near if n in self.enemy_edges]
             # this should never not be true, but it's cheap to check
             if len(choices) > 0:
                 target = random.choice(choices)
-                print target
+                # print target
                 decision = attack(target)
         # lastly, move to a useful spot
         else:
             next = self.bfs_to_enemy_edges[self.location[0]][self.location[1]]
             if next is not None and threat_strength(next) * 10 < self.hp:
-                print self.location, "advancing to", next
+                # print self.location, "advancing to", next
                 decision = move(next)
         if decision:
             return decision

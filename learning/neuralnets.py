@@ -68,7 +68,7 @@ class MultiLayerPerceptron(object):
 	def set_input(self, idx, value):
 		self.__a[0][idx] = value
 
-	def set_inputs(self, input_vector):
+	def set_input_vector(self, input_vector):
 		self.__a[0] = input_vector
 
 	def get_inputs(self):
@@ -103,16 +103,44 @@ class MultiLayerPerceptron(object):
 		final_error = np.multiply(final_error, final_error)
 		return sum(final_error).item(0)
 
-	def deep_learn(self, training_vectors, eps=0.001):
+	def train(self, examples, rate=0.1, max_iter=10000, eps=0.001):
+		i, last_error, error_trend = 0, 0.0, 10*eps
+		while error_trend > eps and i < max_iter:
+			x,y = examples[i % len(examples)]
+			self.set_input_vector(x)
+			self.propagate()
+			error = self.backpropagate(y, rate)
+			error_diff, last_error, i = abs(error - last_error), error, i+1
+			error_trend += (error_diff - error_trend) / 10
+		print "trained to within %f over %d iterations (error derivative at %f)" % (last_error, i, error_trend)
+
+	def deep_learn(self, training_vectors, **kwargs):
 		if self.__layers <= 2:
 			print "nothing to deeply learn for a network with only %d layers." % self.__layers
 			return
 		# in a network with layer sizes [a b c d],
 		# layers for deep learning will be
 		# [[a b a], [a b c b a], [a b c d c b a]]
-		for l in range(1,self.__layers):
+		learnt_weight_matrices = []
+		learnt_biases          = [None]
+		reflection_training = [(x,x) for x,y in training_vectors]
+		for l in xrange(1,self.__layers):
 			topo = self.__layer_sizes[:l] + self.__layer_sizes[l::-1]
-			temp_mlp = 
+			print topo
+			temp_mlp = MultiLayerPerceptron(topo, random=0.1)
+			temp_mlp.__W[:l-1] = learnt_weight_matrices[:l-1]
+			temp_mlp.__W[l+1:] = learnt_weight_matrices[l-1:]
+			temp_mlp.__b[:l]   = learnt_biases[:l]
+			temp_mlp.__b[l+2:] = learnt_biases[l:]
+			# train it to reflect input back out
+			temp_mlp.train(reflection_training, **kwargs)
+			# update saved weight matrices and biases
+			learnt_weight_matrices = temp_mlp.__W
+			learnt_biases          = temp_mlp.__b
+		self.__W = learnt_weight_matrices[:self.__layers-1]
+		self.__b = learnt_biases[:self.__layers]
+		# features learnt; now train on outputs
+		self.train(training_vectors, **kwargs)
 
 	def get_output(self, which):
 		return self.__a[-1][which]

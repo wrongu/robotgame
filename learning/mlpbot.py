@@ -72,7 +72,7 @@ class Robot:
 		senses = self.sense_environment(game)
 
 		brain = state["brain"]
-		brain.set_inputs(senses)
+		brain.set_input_vector(senses)
 		brain.propagate()
 
 		index = brain.choose_output(strict=True)
@@ -177,7 +177,7 @@ class Robot:
 			# 	print "--> ideal outputs of", ideal_output
 			# 	raw_input()
 		if learn:
-			brain.set_inputs(last_senses)
+			brain.set_input_vector(last_senses)
 			brain.propagate()
 			brain.backpropagate(ideal_output, learning_rate=0.2)
 

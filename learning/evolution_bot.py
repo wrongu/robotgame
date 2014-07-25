@@ -64,7 +64,7 @@ class Population(object):
 
 	def group_lesson(self, inputs, outputs, rate=0.5):
 		for brain in self.brains:
-			brain.set_inputs(inputs)
+			brain.set_input_vector(inputs)
 			brain.propagate()
 			brain.backpropagate(outputs, learning_rate=rate)
 
