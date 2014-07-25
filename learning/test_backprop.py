@@ -1,8 +1,7 @@
-from evolution_bot import Perceptron
+from neuralnets import MultiLayerPerceptron
 import numpy as np
 
-p = Perceptron([2,3,2], random=True)
-print p
+p = MultiLayerPerceptron([2,3,2], random=True)
 
 target0 = np.matrix([ 0.8, 0.1]).transpose()
 target1 = np.matrix([0.4, 0.9]).transpose()
@@ -27,7 +26,6 @@ for i in range(1000):
 	p.propagate()
 	p.backpropagate(target1, learning_rate=0.8)
 
-print p
 p.set_input(0,1.0)
 p.set_input(1,0.0)
 p.propagate()
