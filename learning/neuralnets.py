@@ -103,6 +103,17 @@ class MultiLayerPerceptron(object):
 		final_error = np.multiply(final_error, final_error)
 		return sum(final_error).item(0)
 
+	def deep_learn(self, training_vectors, eps=0.001):
+		if self.__layers <= 2:
+			print "nothing to deeply learn for a network with only %d layers." % self.__layers
+			return
+		# in a network with layer sizes [a b c d],
+		# layers for deep learning will be
+		# [[a b a], [a b c b a], [a b c d c b a]]
+		for l in range(1,self.__layers):
+			topo = self.__layer_sizes[:l] + self.__layer_sizes[l::-1]
+			temp_mlp = 
+
 	def get_output(self, which):
 		return self.__a[-1][which]
 
